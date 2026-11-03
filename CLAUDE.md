@@ -105,7 +105,8 @@ Copia de trabajo del Figma: https://www.figma.com/design/mlepvoPoUQvulXCQ78FwE8/
 
 ## Estado
 - [x] Estructura Django creada (4 apps registradas) y subida a GitHub.
-- [ ] acquisition: camera.py, validation.py, tests, comando `check_camera`.
+- [x] acquisition: camera.py, validation.py, tests, comando `check_camera`.
+  En Windows usar el backend MSMF: con DirectShow la webcam sólo dio 10-20 FPS.
 - [ ] analysis: landmarks.py, metrics.py, calibration.py, classifier.py + tests.
 - [ ] alerts: ble_client.py (esperando datos de la pulsera) + pulsera simulada.
 - [ ] monitoring: orquestador en hilo, vistas, templates, video en vivo.
