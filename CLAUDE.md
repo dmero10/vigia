@@ -62,6 +62,9 @@ Capas (Figura 2 del documento):
   umbral = mediana(EAR) × 0.75, limitado entre 0.12 y 0.30.
 - Bostezos RF-06: MAR > 0.6 durante ≥1 s cuenta un bostezo; 3 bostezos en 5 min
   generan nivel 1 durante 3 s y el contador se reinicia.
+- Ajuste propio (no está en el documento oficial; medido con una sola persona): con
+  MAR > 0.5 y hasta 3 s después, el umbral de cierre se multiplica por 0.6, porque
+  bostezar con los ojos abiertos baja el EAR y generaba alertas falsas.
 - RF-02: con luz media < 40 (0–255) o sin rostro > 0.5 s → "medición degradada",
   se reinicia el cierre en curso y se envía nivel 0 (no mantener alertas anteriores).
 - MediaPipe 0.10.32 **ya no tiene `mp.solutions`**: usar la Tasks API
@@ -107,7 +110,9 @@ Copia de trabajo del Figma: https://www.figma.com/design/mlepvoPoUQvulXCQ78FwE8/
 - [x] Estructura Django creada (4 apps registradas) y subida a GitHub.
 - [x] acquisition: camera.py, validation.py, tests, comando `check_camera`.
   En Windows usar el backend MSMF: con DirectShow la webcam sólo dio 10-20 FPS.
-- [ ] analysis: landmarks.py, metrics.py, calibration.py, classifier.py + tests.
+- [x] analysis: landmarks.py, metrics.py, calibration.py, classifier.py + tests, comando
+  `check_analysis`. Probado con una persona: 30 FPS con análisis durante unos 45 s.
+  Sin probar con rostro real: 3 bostezos, poca luz y falta de rostro.
 - [ ] alerts: ble_client.py (esperando datos de la pulsera) + pulsera simulada.
 - [ ] monitoring: orquestador en hilo, vistas, templates, video en vivo.
 - [ ] registry_service: FastAPI + SQLite, sesiones, eventos, resumen, CSV.
