@@ -1,0 +1,23 @@
+# Entorno virtual
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# Bases de datos locales
+*.sqlite3
+db.sqlite3
+
+# Modelo de MediaPipe (se descarga solo)
+*.task
+
+# Exportaciones de pruebas
+*.csv
+
+# Privacidad: nunca subir imágenes ni video del rostro
+*.mp4
+*.avi
+
+# Editor
+.vscode/
