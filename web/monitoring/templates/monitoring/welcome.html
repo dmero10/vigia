@@ -1,0 +1,14 @@
+{% extends "monitoring/base.html" %}
+
+{% block body %}
+<main class="welcome">
+  <div>
+    <div class="logo">{% include "monitoring/icons/eye.svg" %}</div>
+    <h1>VIGÍA</h1>
+    <p class="tagline">Bienvenido. Tu atención empieza aquí.</p>
+    <p class="sub">Detecta signos de somnolencia y recibe alertas en tu pulsera.</p>
+    <a class="btn btn-primary" href="{% url 'monitoring:prepare' %}">Entrar al sistema {% include "monitoring/icons/arrow.svg" %}</a>
+    <div><span class="privacy">{% include "monitoring/icons/shield.svg" %} Solo métricas. Sin guardar imágenes de tu rostro.</span></div>
+  </div>
+</main>
+{% endblock %}

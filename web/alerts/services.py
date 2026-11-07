@@ -57,6 +57,7 @@ class AlertSender:
         self._connected = False
         self._last_error = None
         self._latency_ms = None
+        self._retry_requested = False
 
     def start(self):
         with self._condition:
@@ -85,6 +86,12 @@ class AlertSender:
                 self._level_changed_at = time.monotonic()
                 self._condition.notify_all()
 
+    def retry_now(self):
+        """Botón «Reconectar pulsera»: no espera al siguiente reintento automático."""
+        with self._condition:
+            self._retry_requested = True
+            self._condition.notify_all()
+
     def status(self):
         with self._condition:
             return AlertStatus(
@@ -111,7 +118,10 @@ class AlertSender:
 
     def _wait(self, seconds):
         with self._condition:
-            self._condition.wait_for(lambda: not self._running, timeout=seconds)
+            self._condition.wait_for(
+                lambda: not self._running or self._retry_requested, timeout=seconds
+            )
+            self._retry_requested = False
 
     def _connect(self):
         try:

@@ -171,6 +171,16 @@ class AlertSenderTests(SimpleTestCase):
         self.assertFalse(self.bracelet.is_connected)
         self.assertFalse(self.sender.status().connected)
 
+    def test_retry_now_skips_the_wait(self):
+        self.bracelet.set_available(False)
+        slow = AlertSender(self.bracelet, retry_interval=60)
+        slow.start()
+        self.addCleanup(slow.stop)
+        self.assertTrue(wait_until(lambda: slow.status().last_error is not None))
+        self.bracelet.set_available(True)
+        slow.retry_now()
+        self.assertTrue(wait_until(lambda: slow.status().connected, timeout=1))
+
     def test_stop_while_disconnected_is_quick(self):
         self.bracelet.set_available(False)
         slow = AlertSender(self.bracelet, retry_interval=60)

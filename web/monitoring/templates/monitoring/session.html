@@ -1,0 +1,203 @@
+{% extends "monitoring/base.html" %}
+{% load static %}
+
+{% block title %}Sesión · VIGÍA{% endblock %}
+{% block status %}Preparando{% endblock %}
+
+{% block content %}
+<div id="session"
+     data-state-url="{% url 'monitoring:state' %}"
+     data-command-url="{% url 'monitoring:command' %}"
+     data-video-url="{% url 'monitoring:video' %}"
+     data-summary-url="{% url 'monitoring:summary' %}"
+     data-csrf="{{ csrf_token }}">
+
+  <img id="live" alt="Video en vivo de la cámara" hidden>
+
+  <form id="finish-form" method="post" action="{% url 'monitoring:finish' %}" hidden>{% csrf_token %}</form>
+
+  {# ---------- 01a · Conectar cámara ---------- #}
+  <section data-screen="camera" data-status="Conectando cámara" hidden>
+    {% include "monitoring/_steps.html" with current=1 %}
+    <h1>Conecta tu cámara</h1>
+    <p class="lead">Encuadra tu rostro con buena luz.</p>
+    <div class="split">
+      {% include "monitoring/_camera.html" %}
+      <div class="card">
+        <p class="label">Antes de empezar</p>
+        <ul class="checklist">
+          <li id="chk-camera" class="wait"><span class="mark"></span><div><strong>Cámara detectada</strong><span data-text>Abriendo la cámara…</span></div></li>
+          <li id="chk-face" class="wait"><span class="mark"></span><div><strong>Rostro detectado</strong><span>Mira de frente a la cámara.</span></div></li>
+          <li id="chk-light" class="wait"><span class="mark"></span><div><strong>Luz suficiente</strong><span>Evita estar a contraluz.</span></div></li>
+        </ul>
+        <div class="notice warn" id="camera-notice" hidden>{% include "monitoring/icons/warn.svg" %}<span data-text></span></div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" type="submit" form="finish-form">Finalizar sesión</button>
+      <button class="btn btn-primary" type="button" data-goto="bracelet" id="camera-continue" disabled>Continuar {% include "monitoring/icons/arrow.svg" %}</button>
+    </div>
+  </section>
+
+  {# ---------- 01b · Conectar pulsera ---------- #}
+  <section data-screen="bracelet" data-status="Enlazando pulsera" hidden>
+    {% include "monitoring/_steps.html" with current=2 %}
+    <h1>Enlaza la pulsera</h1>
+    <p class="lead">Enciéndela y mantenla cerca.</p>
+    <div class="split-wide">
+      <div class="illustration">{% include "monitoring/icons/watch.svg" %}</div>
+      <div class="card">
+        <p class="label">Pulsera</p>
+        <ul class="checklist">
+          <li id="chk-bracelet" class="wait"><span class="mark"></span><div><strong data-name>Buscando la pulsera…</strong><span data-text>Preparando la conexión.</span></div></li>
+          <li class="ok"><span class="mark"></span><div><strong>Vibración por nivel</strong><span>Patrón distinto para los niveles 1, 2 y 3.</span></div></li>
+          <li class="ok"><span class="mark"></span><div><strong>Apagado automático</strong><span>Tras 3 s sin señal, la vibración se detiene.</span></div></li>
+        </ul>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" type="button" data-goto="camera">Volver {% include "monitoring/icons/arrow-left.svg" %}</button>
+      <button class="btn btn-primary" type="button" data-command="calibrate">Continuar {% include "monitoring/icons/arrow.svg" %}</button>
+    </div>
+  </section>
+
+  {# ---------- 02 · Calibración ---------- #}
+  <section data-screen="calibrating" data-status="Calibrando" hidden>
+    {% include "monitoring/_steps.html" with current=3 %}
+    <h1>Calibra tu mirada</h1>
+    <p class="lead">Mantén los ojos abiertos 5 segundos.</p>
+    <div class="split">
+      {% include "monitoring/_camera.html" %}
+      <div>
+        <p class="label">Progreso de calibración</p>
+        <p class="big-number" id="calib-seconds">5 s</p>
+        <div class="progress"><span id="calib-bar"></span></div>
+        <p class="small muted">Mira de frente a la cámara con los ojos abiertos, como lo haces normalmente.</p>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" type="submit" form="finish-form">Finalizar sesión</button>
+    </div>
+  </section>
+
+  {# ---------- 02 · Calibración confirmada ---------- #}
+  <section data-screen="calibrated" data-status="Calibración completa" hidden>
+    {% include "monitoring/_steps.html" with current=3 %}
+    <h1>Tu mirada, calibrada.</h1>
+    <p class="lead">La sesión utilizará tu referencia ocular personal.</p>
+    <div class="split">
+      {% include "monitoring/_camera.html" %}
+      <div>
+        <div class="check-badge">{% include "monitoring/icons/check.svg" %}</div>
+        <p class="label" style="color:var(--blue)">Umbral personal · EAR</p>
+        <p class="big-number" id="threshold">–</p>
+        <p>Referencia obtenida en 5 segundos.</p>
+        <p class="small muted">Calibración con los ojos abiertos.</p>
+        <p class="ok-text">Listo para comenzar el monitoreo.</p>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" type="button" data-command="recalibrate">Volver a calibrar {% include "monitoring/icons/arrow-left.svg" %}</button>
+      <button class="btn btn-primary" type="button" data-command="monitor">Comenzar monitoreo {% include "monitoring/icons/arrow.svg" %}</button>
+    </div>
+  </section>
+
+  {# ---------- 03 · Monitoreo activo / 04 · Alerta / Mirada recuperada ---------- #}
+  <section data-screen="monitor" hidden>
+    <div class="title-row">
+      <h1 id="monitor-title">Monitoreo activo</h1>
+      <span class="timer"><span data-timer>00:00:00</span> · SESIÓN</span>
+    </div>
+    <div class="monitor-grid">
+      <div class="card level-card" id="level-card" data-level="0">
+        <p class="label">Nivel de somnolencia</p>
+        <p class="level-number" id="level-number">0</p>
+        <p class="level-name" id="level-name">Sin indicios</p>
+        <p class="level-detail" id="level-detail">Sin cierre ocular prolongado.</p>
+        <div class="scale"><span></span><span></span><span></span><span></span></div>
+        <div class="scale-labels"><span>0 · NORMAL</span><span>3 · ALTO</span></div>
+        <div class="bracelet-line" id="bracelet-line">
+          <strong>{% include "monitoring/icons/bluetooth.svg" %}<span data-title>Pulsera conectada</span></strong>
+          <span data-text>Vibración configurada</span>
+        </div>
+      </div>
+      <div>
+        {% include "monitoring/_camera.html" %}
+        <div class="metrics">
+          <div class="metric"><div class="label">Apertura ocular · EAR</div><div class="value" id="ear">–</div></div>
+          <div class="metric"><div class="label">Apertura bucal · MAR</div><div class="value" id="mar">–</div></div>
+          <div class="metric"><div class="label">Bostezos</div><div class="value" id="yawns">0</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" type="submit" form="finish-form">Finalizar sesión</button>
+      <div class="right">
+        <button class="btn-link" type="button" data-command="simulate_disconnect" data-simulated-only hidden>Simular desconexión de la pulsera</button>
+        <span class="footnote" id="monitor-footnote">Cámara conectada · medición disponible</span>
+        <button class="btn btn-primary" type="button" id="continue-monitoring" hidden>Continuar monitoreo {% include "monitoring/icons/arrow.svg" %}</button>
+      </div>
+    </div>
+  </section>
+
+  {# ---------- 06 · Medición no disponible ---------- #}
+  <section data-screen="degraded" data-status="Medición no disponible" hidden>
+    <p class="eyebrow">Recuperar el monitoreo</p>
+    <div class="split-wide">
+      <div class="illustration">{% include "monitoring/icons/eye-crossed.svg" %}</div>
+      <div>
+        <h1>No podemos medir<br>tu estado.</h1>
+        <p class="lead">Mientras tanto, la alerta vuelve a nivel 0.</p>
+        <div class="notice warn">{% include "monitoring/icons/warn.svg" %}<span id="degraded-reason">Medición en pausa.</span></div>
+        <ol class="numbered">
+          <li><b>01</b><div><strong>Mejora la iluminación</strong><span>Evita la oscuridad y el contraluz.</span></div></li>
+          <li><b>02</b><div><strong>Mira a la cámara</strong><span>Mantén tu rostro dentro del encuadre.</span></div></li>
+        </ol>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" type="submit" form="finish-form">Finalizar sesión</button>
+      <span class="footnote">El monitoreo se reanuda solo al recuperar la medición.</span>
+    </div>
+  </section>
+
+  {# ---------- 07 · Pulsera desconectada ---------- #}
+  <section data-screen="disconnected" data-status="Conexión interrumpida" hidden>
+    <p class="eyebrow">Recuperar el monitoreo</p>
+    <div class="split-wide">
+      <div class="illustration">{% include "monitoring/icons/watch.svg" with crossed=True watch_text="SIN ENLACE" %}</div>
+      <div>
+        <h1>La pulsera<br>se desconectó.</h1>
+        <p class="lead">Tras 3 s sin señal, la vibración se detiene.</p>
+        <div class="notice warn">{% include "monitoring/icons/warn.svg" %}<span>Pulsera en reposo hasta restablecer el enlace.</span></div>
+        <ol class="numbered">
+          <li><b>01</b><div><strong>Comprueba la pulsera</strong><span>Enciéndela y acércala al equipo.</span></div></li>
+          <li><b>02</b><div><strong>Vuelve a enlazarla</strong><span>Pulsa «Reconectar pulsera». También se reintenta sola.</span></div></li>
+        </ol>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" type="submit" form="finish-form">Finalizar sesión</button>
+      <div class="right">
+        <button class="btn-link" type="button" data-command="simulate_reconnect" data-simulated-only hidden>Simular reconexión</button>
+        <button class="btn btn-primary" type="button" data-command="reconnect">Reconectar pulsera {% include "monitoring/icons/arrow.svg" %}</button>
+      </div>
+    </div>
+  </section>
+
+  {# ---------- Error ---------- #}
+  <section data-screen="error" data-status="Sesión detenida" hidden>
+    <p class="eyebrow">Algo salió mal</p>
+    <h1>No se pudo continuar.</h1>
+    <div class="notice error">{% include "monitoring/icons/warn.svg" %}<span id="error-text"></span></div>
+    <div class="actions">
+      <a class="btn btn-secondary" href="{% url 'monitoring:summary' %}">Ver resumen</a>
+      <a class="btn btn-primary" href="{% url 'monitoring:prepare' %}">Volver a intentar {% include "monitoring/icons/arrow.svg" %}</a>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'monitoring/session.js' %}"></script>
+{% endblock %}

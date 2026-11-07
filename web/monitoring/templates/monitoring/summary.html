@@ -1,0 +1,79 @@
+{% extends "monitoring/base.html" %}
+
+{% block title %}Resumen de la sesión · VIGÍA{% endblock %}
+{% block status %}Sesión finalizada{% endblock %}
+
+{% block content %}
+{# ---------- 05 · Resumen de la sesión ---------- #}
+<section id="summary-view">
+  <div class="title-row">
+    <h1>Sesión finalizada</h1>
+    <span class="timer">{{ summary.started_at|date:"d/m/Y · H:i" }}</span>
+  </div>
+
+  <div class="stats">
+    <div class="card stat dark"><div class="label">Duración</div><div class="value">{{ duration }}</div></div>
+    <div class="card stat"><div class="label">Alertas</div><div class="value">{{ summary.alert_count }}</div></div>
+    <div class="card stat"><div class="label">Nivel máximo</div><div class="value">{{ summary.max_level }} <span class="small muted">· {{ max_level_name }}</span></div></div>
+    <div class="card stat"><div class="label">Umbral EAR</div><div class="value">{% if summary.threshold %}{{ summary.threshold|floatformat:"2u" }}{% else %}–{% endif %}</div></div>
+  </div>
+
+  <div class="card">
+    <p class="label">Eventos de la sesión</p>
+    {% if events %}
+      <table>
+        <thead><tr><th>Hora</th><th>Nivel</th><th>Estado</th></tr></thead>
+        <tbody>
+          {% for event in events %}
+            <tr>
+              <td>{{ event.time|slice:"11:" }}</td>
+              <td><span class="pill {% if 'Medición' in event.status %}deg{% elif event.level %}l{{ event.level }}{% endif %}">{{ event.level }}</span></td>
+              <td>{{ event.status }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted small">No hubo cambios de nivel durante la sesión.</p>
+    {% endif %}
+  </div>
+
+  <div class="actions">
+    <a class="btn btn-secondary" href="{% url 'monitoring:prepare' %}">Nueva sesión</a>
+    <a class="btn btn-primary" id="export-csv" href="{% url 'monitoring:summary_csv' %}" download="{{ csv_name }}">Exportar CSV {% include "monitoring/icons/arrow.svg" %}</a>
+  </div>
+</section>
+
+{# ---------- 05b · CSV exportado ---------- #}
+<section id="exported-view" hidden>
+  <p class="eyebrow">Resultados exportados</p>
+  <div class="card exported">
+    <div class="check-badge">{% include "monitoring/icons/check.svg" %}</div>
+    <h1>CSV exportado correctamente</h1>
+    <span class="file-chip">{{ csv_name }}</span>
+    <p class="small muted">Contiene la hora, el nivel y el estado de cada evento. No incluye imágenes de tu rostro.</p>
+  </div>
+  <div class="actions">
+    <button class="btn btn-secondary" type="button" id="back-to-summary">Volver al resumen {% include "monitoring/icons/arrow-left.svg" %}</button>
+    <a class="btn btn-primary" href="{% url 'monitoring:prepare' %}">Nueva sesión {% include "monitoring/icons/arrow.svg" %}</a>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Tras iniciar la descarga se muestra la pantalla «CSV exportado».
+  document.getElementById('export-csv').addEventListener('click', function () {
+    setTimeout(function () {
+      document.getElementById('summary-view').hidden = true;
+      document.getElementById('exported-view').hidden = false;
+      document.getElementById('top-status').textContent = 'CSV exportado';
+    }, 300);
+  });
+  document.getElementById('back-to-summary').addEventListener('click', function () {
+    document.getElementById('exported-view').hidden = true;
+    document.getElementById('summary-view').hidden = false;
+    document.getElementById('top-status').textContent = 'Sesión finalizada';
+  });
+</script>
+{% endblock %}

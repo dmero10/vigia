@@ -1,0 +1,13 @@
+<svg viewBox="0 0 120 200" fill="none" aria-hidden="true">
+  <rect x="38" y="2" width="44" height="60" rx="10" fill="#c3cddd"/>
+  <rect x="38" y="138" width="44" height="60" rx="10" fill="#c3cddd"/>
+  <path d="M55 22h10M55 30h10M55 170h10M55 178h10" stroke="#94a3b8" stroke-width="2" stroke-linecap="round"/>
+  <rect x="14" y="52" width="92" height="96" rx="16" fill="#1b2640"/>
+  <rect x="104" y="88" width="5" height="18" rx="2" fill="#1b2640"/>
+  <rect x="22" y="60" width="76" height="80" rx="10" fill="#2b3a5c"/>
+  <text x="60" y="80" text-anchor="middle" font-size="8" font-weight="700" fill="#e5e9f2" font-family="Segoe UI, sans-serif">VIGÍA</text>
+  <path d="M42 100c5-7 11-10 18-10s13 3 18 10c-5 7-11 10-18 10s-13-3-18-10Z" stroke="#e5e9f2" stroke-width="1.5"/>
+  <circle cx="60" cy="100" r="3.5" stroke="#e5e9f2" stroke-width="1.5"/>
+  {% if crossed %}<path d="M40 86 80 116" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round"/>{% endif %}
+  <text x="60" y="128" text-anchor="middle" font-size="6.5" font-weight="700" fill="#e5e9f2" font-family="Segoe UI, sans-serif">{{ watch_text|default:"HÁPTICA" }}</text>
+</svg>

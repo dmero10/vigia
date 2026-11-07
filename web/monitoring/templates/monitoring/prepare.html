@@ -1,0 +1,48 @@
+{% extends "monitoring/base.html" %}
+
+{% block title %}Preparar monitoreo · VIGÍA{% endblock %}
+{% block status %}Nueva sesión{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">Detección + respuesta</p>
+    <h1>Tu atención, <em>en primer plano.</em></h1>
+    <p class="lead">La cámara detecta. La pulsera te avisa.</p>
+    <p class="privacy">{% include "monitoring/icons/shield.svg" %} Sin guardar imágenes de tu rostro.</p>
+  </div>
+  <div class="illustration hero-art">
+    <span class="tag">01 / SESIÓN</span>
+    <div class="pair">
+      <figure>
+        <svg class="pair-eye" viewBox="0 0 90 50" fill="none" aria-hidden="true"><path d="M5 25c10-14 24-21 40-21s30 7 40 21c-10 14-24 21-40 21S15 39 5 25Z" stroke="#2563eb" stroke-width="2" fill="#f4f7fe"/><circle cx="45" cy="25" r="10" stroke="#2563eb" stroke-width="2"/><circle cx="45" cy="25" r="3" fill="#2563eb"/></svg>
+        <figcaption>Cámara</figcaption>
+      </figure>
+      <span class="link-line"></span>
+      <figure>
+        <span class="pair-watch">{% include "monitoring/icons/watch.svg" %}</span>
+        <figcaption>Pulsera</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="three-steps">
+  <div><b>01</b><strong>Conecta la cámara</strong><p>Encuadra tu rostro con buena luz.</p></div>
+  <div><b>02</b><strong>Enlaza la pulsera</strong><p>Enciéndela y mantenla cerca.</p></div>
+  <div><b>03</b><strong>Calibra tu mirada</strong><p>Mantén los ojos abiertos 5 segundos.</p></div>
+</section>
+
+<form method="post" action="{% url 'monitoring:start' %}" class="actions">
+  {% csrf_token %}
+  <span class="footnote">Sesión local · sin cuenta</span>
+  <div class="right">
+    <div class="mode-picker" role="radiogroup" aria-label="Pulsera a usar">
+      {% for value, name in bracelet_modes.items %}
+        <label><input type="radio" name="bracelet_mode" value="{{ value }}" {% if value == default_mode %}checked{% endif %}>{{ name }}</label>
+      {% endfor %}
+    </div>
+    <button class="btn btn-primary" type="submit">Iniciar monitoreo {% include "monitoring/icons/arrow.svg" %}</button>
+  </div>
+</form>
+{% endblock %}

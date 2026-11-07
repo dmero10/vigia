@@ -118,6 +118,9 @@ Copia de trabajo del Figma: https://www.figma.com/design/mlepvoPoUQvulXCQ78FwE8/
 - [ ] alerts: pulsera simulada, AlertSender (hilo propio, latido 1 s, reintentos),
   ble_client.py (Bleak 3.0.2) y comando `check_bracelet [--real]` listos.
   Falta probar con la pulsera real: latencia (RF-07), patrones (RF-08), RF-09, alcance.
-- [ ] monitoring: orquestador en hilo, vistas, templates, video en vivo.
+- [ ] monitoring: orquestador en hilo (espera los botones del recorrido), vistas,
+  templates del Figma (escala 0–3), video MJPEG en memoria, resumen y CSV.
+  Probado con cámara/rostro simulados y capturas; falta probar con webcam real.
+  El resumen y el CSV salen de memoria: pasarlos a M4 cuando exista registry_service.
 - [ ] registry_service: FastAPI + SQLite, sesiones, eventos, resumen, CSV.
 - [ ] Pruebas de RNF y guion de la demo.

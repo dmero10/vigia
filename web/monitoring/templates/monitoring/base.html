@@ -1,0 +1,23 @@
+{% load static %}<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}VIGÍA{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'monitoring/vigia.css' %}">
+</head>
+<body>
+{% block body %}
+  <header class="topbar">
+    <a class="brand" href="{% url 'monitoring:welcome' %}">{% include "monitoring/icons/eye.svg" %} VIGÍA</a>
+    <span class="divider"></span>
+    <span class="subtitle">Monitoreo de somnolencia</span>
+    <span class="status" id="top-status">{% block status %}{% endblock %}</span>
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+{% endblock %}
+{% block scripts %}{% endblock %}
+</body>
+</html>
