@@ -80,14 +80,16 @@ Capas (Figura 2 del documento):
   Boca: esquinas (61, 291); verticales (81,178), (13,14), (311,402); MAR = promedio vertical / ancho.
 - No se entrena un modelo propio; MediaPipe ya está entrenado.
 
-## Pulsera (reportado por el equipo, sin verificar en código)
+## Pulsera (verificado en `firmware/pulsera_sticks3_final/pulsera_sticks3_final.ino`)
 M5Stack StickS3 (ESP32-S3) + Unit Vibrator U059 por Grove en G9 (no G1/G2),
 salida 5 V del Grove habilitada, firmware en Arduino IDE, anuncio BLE
-`PulseraSomnolencia`. Python envía el nivel al cambiar y un latido cada 1 s;
-el firmware apaga el motor si pasan 3 s sin señal (RF-09). Necesita USB o
-powerbank. **Pendiente:** UUID de servicio/característica y formato de mensajes
-(están en el script de prueba y el `.ino` del compañero). Siempre debe existir
-un modo con pulsera simulada para la demo.
+`PulseraSomnolencia`. Servicio `12345678-1234-1234-1234-1234567890ab`,
+característica `abcd1234-5678-90ab-cdef-1234567890ab` (escritura con respuesta).
+Mensaje = nivel como un dígito ASCII (`"2"`); el latido reenvía el nivel cada 1 s.
+El firmware apaga el motor si pasan 3 s sin mensajes (RF-09) y al desconectarse.
+Acepta 0–4 (versión vieja), Python sólo envía 0–3; un carácter no numérico lo
+interpretaría como 4. Necesita USB o powerbank. Siempre debe existir un modo con
+pulsera simulada para la demo.
 
 ## Requisitos clave
 RF-01 video ≥25 FPS · RF-02 medición degradada · RF-03 EAR/MAR por fotograma ·
@@ -113,7 +115,9 @@ Copia de trabajo del Figma: https://www.figma.com/design/mlepvoPoUQvulXCQ78FwE8/
 - [x] analysis: landmarks.py, metrics.py, calibration.py, classifier.py + tests, comando
   `check_analysis`. Probado con una persona: 30 FPS con análisis durante unos 45 s.
   Sin probar con rostro real: 3 bostezos, poca luz y falta de rostro.
-- [ ] alerts: ble_client.py (esperando datos de la pulsera) + pulsera simulada.
+- [ ] alerts: pulsera simulada, AlertSender (hilo propio, latido 1 s, reintentos),
+  ble_client.py (Bleak 3.0.2) y comando `check_bracelet [--real]` listos.
+  Falta probar con la pulsera real: latencia (RF-07), patrones (RF-08), RF-09, alcance.
 - [ ] monitoring: orquestador en hilo, vistas, templates, video en vivo.
 - [ ] registry_service: FastAPI + SQLite, sesiones, eventos, resumen, CSV.
 - [ ] Pruebas de RNF y guion de la demo.

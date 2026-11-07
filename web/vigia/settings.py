@@ -124,3 +124,8 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+# VIGÍA: pulsera a usar. 'simulated' = pulsera simulada (demo y pruebas);
+# 'ble' = pulsera real M5StickS3 por Bluetooth (alerts/ble_client.py).
+BRACELET_MODE = 'simulated'
