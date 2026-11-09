@@ -19,8 +19,9 @@ Django nunca la lee: sólo usa la API.
 
 ## Cómo encenderlo (terminal cmd aparte)
 
+Desde la carpeta principal del proyecto (`vigia`):
+
 ```
-cd rutadearpetaigia
 .venv\Scripts\activate
 cd registry_service
 python -m uvicorn app.main:app --port 8001
