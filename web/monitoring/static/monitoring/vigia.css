@@ -264,3 +264,5 @@ td { padding: 10px 12px; border-bottom: 1px solid var(--line); font-variant-nume
   .topbar .subtitle, .topbar .divider { display: none; }
   .btn { min-width: 0; flex: 1; }
 }
+
+.registry-note { margin: 12px 0 0; }

@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -129,3 +130,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # VIGÍA: pulsera a usar. 'simulated' = pulsera simulada (demo y pruebas);
 # 'ble' = pulsera real M5StickS3 por Bluetooth (alerts/ble_client.py).
 BRACELET_MODE = 'simulated'
+
+# VIGÍA: dirección del microservicio de registro M4 (registry_service).
+# Se puede cambiar con la variable de entorno VIGIA_REGISTRY_URL.
+REGISTRY_URL = os.environ.get('VIGIA_REGISTRY_URL', 'http://127.0.0.1:8001')

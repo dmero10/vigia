@@ -22,6 +22,7 @@ from monitoring.orchestrator import (
     PHASE_PREVIEW,
     Orchestrator,
 )
+from monitoring.registry_client import RegistryStatus, RegistryUnavailable
 
 
 def wait_until(condition, timeout=5.0):
@@ -94,12 +95,14 @@ class OrchestratorTestCase(SimpleTestCase):
         self.face = OPEN_FACE
         self.camera = FakeCamera()
         self.bracelet = SimulatedBracelet()
+        self.registry = RecordingRegistry()
 
     def make(self):
         orchestrator = Orchestrator(
             camera_factory=lambda: self.camera,
             detector_factory=lambda: FakeDetector(self.current_face),
             bracelet_factory=lambda mode: self.bracelet,
+            registry=self.registry,
         )
         self.addCleanup(orchestrator.stop)
         return orchestrator
@@ -303,9 +306,12 @@ class ViewTests(OrchestratorTestCase):
     def setUp(self):
         super().setUp()
         self.orchestrator = self.make()
-        patcher = mock.patch('monitoring.views.get_orchestrator', return_value=self.orchestrator)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.remote = FakeRemoteQueue(available=False)
+        for target, value in (('monitoring.views.get_orchestrator', self.orchestrator),
+                              ('monitoring.views.get_registry_queue', self.remote)):
+            patcher = mock.patch(target, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def finish_session(self):
         self.run_to_monitoring(self.orchestrator)
@@ -384,12 +390,13 @@ class ViewTests(OrchestratorTestCase):
         response = self.client.get(reverse('monitoring:summary'))
         self.assertContains(response, 'Sesión finalizada')
         self.assertContains(response, 'Señal inicial')
+        self.assertContains(response, 'no respondió')  # M4 apagado: datos en memoria.
 
         csv_response = self.client.get(reverse('monitoring:summary_csv'))
         self.assertEqual(csv_response['Content-Type'], 'text/csv; charset=utf-8')
         self.assertIn('attachment; filename="vigia_sesion_', csv_response['Content-Disposition'])
         text = csv_response.content.decode('utf-8')
-        self.assertTrue(text.startswith('﻿hora,nivel,estado'))
+        self.assertTrue(text.startswith('﻿hora,nivel,estado,ear,mar'))
         self.assertIn(',1,Señal inicial', text)
 
     def test_summary_without_session_goes_to_prepare(self):
@@ -397,3 +404,94 @@ class ViewTests(OrchestratorTestCase):
                              reverse('monitoring:prepare'))
         self.assertRedirects(self.client.get(reverse('monitoring:summary_csv')),
                              reverse('monitoring:prepare'))
+
+    def test_summary_and_csv_come_from_m4_when_available(self):
+        self.finish_session()
+        session_id = self.orchestrator.summary().session_id
+        self.remote.available = True
+        self.remote.client = FakeRemoteClient(
+            summary={'session_id': session_id, 'started_at': '2026-11-10T15:00:00+00:00',
+                     'duration_s': 75.0, 'alert_count': 4, 'max_level': 2, 'threshold': 0.22},
+            events=[{'at': '2026-11-10T15:00:10+00:00', 'level': 2, 'status': 'Atención reducida'}],
+            csv='hora,nivel,estado,ear,mar\r\n2026-11-10 10:00:10,2,desde M4,0.100,0.050\r\n'.encode(),
+        )
+        response = self.client.get(reverse('monitoring:summary'))
+        self.assertContains(response, 'Datos guardados en el servicio de registro (M4)')
+        self.assertContains(response, '00:01:15')
+        self.assertContains(response, 'Atención reducida')
+        self.assertContains(response, '10:00:10')  # Hora local de Guayaquil.
+        self.assertEqual(response.context['summary']['alert_count'], 4)
+
+        text = self.client.get(reverse('monitoring:summary_csv')).content.decode('utf-8')
+        self.assertIn('desde M4', text)
+
+
+# ---------- M4: registros falsos ----------
+
+class RecordingRegistry:
+    """Registro falso que guarda lo que el orquestador encola."""
+
+    def __init__(self):
+        self.calls = []
+
+    def start_session(self, session_id, started_at, bracelet_mode=None):
+        self.calls.append(('session', session_id, bracelet_mode))
+
+    def add_event(self, session_id, event):
+        self.calls.append(('event', session_id, event))
+
+    def finish_session(self, session_id, ended_at, threshold=None):
+        self.calls.append(('finish', session_id, threshold))
+
+
+class FakeRemoteClient:
+    def __init__(self, summary=None, events=(), csv=b''):
+        self._summary, self._events, self._csv = summary, list(events), csv
+
+    def summary(self, session_id):
+        return self._summary
+
+    def events(self, session_id):
+        return self._events
+
+    def events_csv(self, session_id):
+        return self._csv
+
+
+class FakeRemoteQueue:
+    """Lo que las vistas usan de la cola: flush(), status() y client."""
+
+    def __init__(self, available, client=None):
+        self.available = available
+        self.client = client or FakeRemoteClient()
+
+    def flush(self, timeout):
+        return self.available
+
+    def status(self):
+        return RegistryStatus(self.available, 0, 0, 0, None)
+
+
+class OrchestratorRegistryTests(OrchestratorTestCase):
+    def test_session_events_and_finish_are_queued_in_order(self):
+        orchestrator = self.make()
+        self.run_to_monitoring(orchestrator)
+        self.face = CLOSED_FACE
+        self.assertTrue(wait_until(lambda: orchestrator.state().level == 3, timeout=10))
+        orchestrator.stop()
+
+        calls = self.registry.calls
+        self.assertEqual(calls[0][0], 'session')
+        self.assertEqual(calls[-1][0], 'finish')
+        session_id = calls[0][1]
+        self.assertEqual(orchestrator.summary().session_id, session_id)
+        self.assertTrue(all(call[1] == session_id for call in calls))
+        self.assertEqual(calls[0][2], 'simulated')
+        self.assertAlmostEqual(calls[-1][2], 0.30)
+
+        events = [call[2] for call in calls if call[0] == 'event']
+        self.assertEqual([event['level'] for event in events], [1, 2, 3])
+        self.assertAlmostEqual(events[0]['ear'], 0.04)
+        self.assertEqual(events[0]['mar'], 0.0)
+        self.assertEqual(len({event['id'] for event in events}), 3)
+        self.assertNotIn('image', events[0])  # RNF-05: sólo métricas.

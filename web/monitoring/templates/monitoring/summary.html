@@ -36,6 +36,11 @@
     {% else %}
       <p class="muted small">No hubo cambios de nivel durante la sesión.</p>
     {% endif %}
+    {% if from_registry %}
+      <p class="small muted registry-note">Datos guardados en el servicio de registro (M4).</p>
+    {% else %}
+      <p class="small muted registry-note">El servicio de registro (M4) no respondió: se muestran los datos de esta sesión guardados en memoria.</p>
+    {% endif %}
   </div>
 
   <div class="actions">
@@ -51,7 +56,7 @@
     <div class="check-badge">{% include "monitoring/icons/check.svg" %}</div>
     <h1>CSV exportado correctamente</h1>
     <span class="file-chip">{{ csv_name }}</span>
-    <p class="small muted">Contiene la hora, el nivel y el estado de cada evento. No incluye imágenes de tu rostro.</p>
+    <p class="small muted">Contiene la hora, el nivel, el estado y las métricas EAR/MAR de cada evento. No incluye imágenes de tu rostro.</p>
   </div>
   <div class="actions">
     <button class="btn btn-secondary" type="button" id="back-to-summary">Volver al resumen {% include "monitoring/icons/arrow-left.svg" %}</button>

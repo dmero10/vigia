@@ -2,7 +2,7 @@
 
 Proyecto universitario (Construcción de Software, UNEMI, grupo de 5). Prototipo
 local que detecta somnolencia con la webcam y avisa con una pulsera vibratoria
-por Bluetooth LE. **La presentación es la semana del 10 de noviembre de 2026 y
+por Bluetooth LE. **La fecha de la presentación aún no está confirmada; ese día
 debe mostrarse todo funcionando.** Fuente oficial de requisitos: documento
 *Componente Práctico – Detector de somnolencia* (las tareas anteriores tienen
 datos desactualizados, como los niveles 0–4).
@@ -33,8 +33,8 @@ vigia/
 │   ├── acquisition/     M1: cámara (OpenCV) y validación del video
 │   ├── analysis/        M2: puntos faciales, EAR/MAR, calibración, niveles
 │   └── alerts/          M3: niveles a enviar y cliente BLE (Bleak) de la pulsera
-├── registry_service/    M4: microservicio FastAPI + SQLite (proceso aparte)
-├── firmware/            sketch Arduino del M5StickS3 (pendiente de recibir)
+├── registry_service/    M4: microservicio FastAPI + SQLite (proceso aparte, puerto 8001)
+├── firmware/            sketch Arduino del M5StickS3 (pulsera_sticks3_final)
 └── docs/
 ```
 
@@ -118,9 +118,15 @@ Copia de trabajo del Figma: https://www.figma.com/design/mlepvoPoUQvulXCQ78FwE8/
 - [ ] alerts: pulsera simulada, AlertSender (hilo propio, latido 1 s, reintentos),
   ble_client.py (Bleak 3.0.2) y comando `check_bracelet [--real]` listos.
   Falta probar con la pulsera real: latencia (RF-07), patrones (RF-08), RF-09, alcance.
-- [ ] monitoring: orquestador en hilo (espera los botones del recorrido), vistas,
-  templates del Figma (escala 0–3), video MJPEG en memoria, resumen y CSV.
-  Probado con cámara/rostro simulados y capturas; falta probar con webcam real.
-  El resumen y el CSV salen de memoria: pasarlos a M4 cuando exista registry_service.
-- [ ] registry_service: FastAPI + SQLite, sesiones, eventos, resumen, CSV.
+- [x] monitoring: orquestador en hilo (espera los botones del recorrido), vistas,
+  templates del Figma (escala 0–3), video MJPEG en memoria. Probado con la webcam real.
+  Resumen y CSV se piden a M4; si M4 no responde se usan los datos en memoria.
+- [x] registry_service (M4): FastAPI + SQLite en proceso aparte (puerto 8001), capas
+  main.py (API) / services.py (lógica) / repository.py (SQLite), contrato en schemas.py
+  (extra='forbid' → rechaza imágenes). Eventos con id del cliente (reintentos sin duplicar),
+  EAR/MAR, resumen y CSV. Django: `monitoring/registry_client.py` (RegistryQueue: hilo,
+  lotes, confirmaciones, reintentos 0.5–5 s; nunca bloquea) y comando `check_registry`.
+  Probado de punta a punta: M4 apagado a mitad de sesión → la alerta siguió y los eventos
+  llegaron al volver a encenderlo. Arranque: `cd registry_service` y
+  `python -m uvicorn app.main:app --port 8001` (docs en /docs). Pruebas: `python -m unittest`.
 - [ ] Pruebas de RNF y guion de la demo.

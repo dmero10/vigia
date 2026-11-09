@@ -16,10 +16,12 @@ En preview y calibrated el hilo sigue leyendo la cámara y espera un botón.
 import logging
 import threading
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
 import cv2
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
@@ -30,6 +32,7 @@ from analysis.calibration import CALIBRATION_MS, CalibrationError, EarCalibrator
 from analysis.classifier import DrowsinessClassifier
 from analysis.landmarks import FaceLandmarkDetector, LandmarkError
 from analysis.metrics import compute_ear, compute_mar
+from monitoring.registry_client import NullRegistry, get_registry_queue
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +62,15 @@ class LevelEvent:
     at: datetime
     level: int
     degraded_reason: str | None
+    ear: float | None = None
+    mar: float | None = None
+    closed_ms: int = 0
+    yawn_count: int = 0
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+    def as_payload(self):
+        """Datos que se envían a M4 (sólo métricas, nunca imágenes)."""
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -72,6 +84,7 @@ class SessionSummary:
     max_level: int
     threshold: float | None = None
     events: tuple = ()
+    session_id: str | None = None  # Identificador de la sesión en M4.
 
 
 @dataclass(frozen=True)
@@ -115,6 +128,7 @@ class _Measurement:
 class _Session:
     started_at: datetime
     started_monotonic: float
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
     alert_count: int = 0
     max_level: int = 0
     last_level: int = 0
@@ -126,10 +140,12 @@ class Orchestrator:
     """Una sesión de monitoreo a la vez."""
 
     def __init__(self, camera_factory=Camera, detector_factory=FaceLandmarkDetector,
-                 bracelet_factory=create_bracelet):
+                 bracelet_factory=create_bracelet, registry=None):
         self._camera_factory = camera_factory
         self._detector_factory = detector_factory
         self._bracelet_factory = bracelet_factory
+        # M4: cola de envío que nunca bloquea (ver registry_client.py).
+        self._registry = registry if registry is not None else NullRegistry()
         self._bracelet_mode = None
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -161,9 +177,13 @@ class Orchestrator:
             self._preview = None
             self._fps = FpsMeter()
             self._state = MonitoringState(phase=PHASE_STARTING)
+            session = self._session
             self._thread = threading.Thread(target=self._run, name='monitoring', daemon=True)
             self._thread.start()
-            return True
+        self._registry.start_session(
+            session.id, session.started_at, bracelet_mode or settings.BRACELET_MODE
+        )
+        return True
 
     def stop(self):
         """Termina la sesión y espera a que se liberen la cámara y la pulsera."""
@@ -306,7 +326,7 @@ class Orchestrator:
                 measurement.timestamp_ms, measurement.ear, measurement.mar, measurement.light_ok
             )
             sender.set_level(assessment.level)  # No bloquea: lo envía el hilo de la pulsera.
-            self._record(assessment.level, assessment.degraded_reason)
+            self._record(assessment, measurement)
             with self._lock:
                 session = self._session
                 alert_count, max_level = session.alert_count, session.max_level
@@ -352,7 +372,9 @@ class Orchestrator:
             with self._lock:
                 self._preview = encoded.tobytes()
 
-    def _record(self, level, degraded_reason):
+    def _record(self, assessment, measurement):
+        """RF-11: guarda cada cambio de nivel o de medición y lo encola para M4."""
+        level, degraded_reason = assessment.level, assessment.degraded_reason
         with self._lock:
             session = self._session
             if level == session.last_level and degraded_reason == session.last_degraded:
@@ -362,7 +384,13 @@ class Orchestrator:
             session.max_level = max(session.max_level, level)
             session.last_level = level
             session.last_degraded = degraded_reason
-            session.events.append(LevelEvent(timezone.now(), level, degraded_reason))
+            event = LevelEvent(
+                at=timezone.now(), level=level, degraded_reason=degraded_reason,
+                ear=_rounded(measurement.ear), mar=_rounded(measurement.mar),
+                closed_ms=assessment.closed_ms, yawn_count=assessment.yawn_count,
+            )
+            session.events.append(event)
+        self._registry.add_event(session.id, event.as_payload())  # Sólo encola.
 
     def _set_state(self, **changes):
         with self._lock:
@@ -383,10 +411,19 @@ class Orchestrator:
                 max_level=session.max_level,
                 threshold=self._state.threshold,
                 events=tuple(session.events),
+                session_id=session.id,
             )
+            summary = self._summary
             phase = PHASE_ERROR if self._state.phase == PHASE_ERROR else PHASE_FINISHED
             self._state = _replace(self._state, phase=phase, level=0, elapsed_s=duration_s)
             self._preview = None
+        self._registry.finish_session(
+            summary.session_id, summary.ended_at, _rounded(summary.threshold)
+        )
+
+
+def _rounded(value):
+    return None if value is None else round(float(value), 4)
 
 
 def _replace(state, **changes):
@@ -404,5 +441,5 @@ def get_orchestrator():
     global _orchestrator
     with _orchestrator_lock:
         if _orchestrator is None:
-            _orchestrator = Orchestrator()
+            _orchestrator = Orchestrator(registry=get_registry_queue())
         return _orchestrator
