@@ -33,6 +33,16 @@ cd web
 python manage.py migrate
 ```
 
+**Si ya lo tenían descargado**, desde la carpeta `vigia` con el entorno activado:
+
+```
+git pull
+pip install -r requirements.txt
+```
+
+El `pip install` hace falta cada vez que cambia `requirements.txt` (por ejemplo, para
+instalar Channels y Daphne, que usa el WebSocket). Sin él, Django no arranca.
+
 No instalar `opencv-python` aparte: MediaPipe ya trae `opencv-contrib-python`.
 El modelo `face_landmarker.task` se descarga solo la primera vez que se usa la cámara.
 
@@ -88,6 +98,9 @@ Usan cámara, rostro y pulsera simulados: no necesitan webcam ni hardware.
   cumplieron 5 min de monitoreo sin bajar de 25 FPS (también queda en M4).
 - **Fuerza de vibración:** deslizador 1–5 que escala todos los niveles. El mensaje BLE pasa
   a dos dígitos (nivel y fuerza).
+- **Varios rostros:** se detectan hasta 3 y se mide el más grande (el más cercano). En el
+  video, el rostro medido lleva un recuadro verde y los demás uno gris, y la interfaz avisa
+  cuántos hay. Falta comprobar con la webcam real que los FPS no bajan.
 
 Medido hasta ahora:
 
