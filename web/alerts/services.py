@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
-from alerts.bracelet import BraceletError, SimulatedBracelet
+from alerts.bracelet import DEFAULT_STRENGTH, STRENGTHS, BraceletError, SimulatedBracelet
 
 LEVELS = range(4)  # 0 = normal; 1, 2, 3 = alerta.
 HEARTBEAT_INTERVAL_S = 1.0
@@ -38,13 +38,14 @@ class AlertStatus:
     sent_level: int | None  # Último nivel que llegó a la pulsera.
     last_error: str | None
     latency_ms: float | None  # Del último cambio: desde set_level() hasta enviarlo.
+    strength: int = DEFAULT_STRENGTH  # Fuerza de vibración elegida (1-5).
 
 
 class AlertSender:
     """Mantiene la pulsera conectada y al día con el nivel actual."""
 
     def __init__(self, bracelet, heartbeat_interval=HEARTBEAT_INTERVAL_S,
-                 retry_interval=RETRY_INTERVAL_S):
+                 retry_interval=RETRY_INTERVAL_S, strength=DEFAULT_STRENGTH):
         self.bracelet = bracelet
         self._heartbeat_interval = heartbeat_interval
         self._retry_interval = retry_interval
@@ -54,6 +55,8 @@ class AlertSender:
         self._level = 0
         self._level_changed_at = None
         self._sent_level = None
+        self._strength = _valid_strength(strength)
+        self._sent_strength = None
         self._connected = False
         self._last_error = None
         self._latency_ms = None
@@ -86,6 +89,14 @@ class AlertSender:
                 self._level_changed_at = time.monotonic()
                 self._condition.notify_all()
 
+    def set_strength(self, strength):
+        """Fuerza de vibración (1-5) para todos los niveles. Se envía al momento."""
+        strength = _valid_strength(strength)
+        with self._condition:
+            if strength != self._strength:
+                self._strength = strength
+                self._condition.notify_all()
+
     def retry_now(self):
         """Botón «Reconectar pulsera»: no espera al siguiente reintento automático."""
         with self._condition:
@@ -100,6 +111,7 @@ class AlertSender:
                 sent_level=self._sent_level,
                 last_error=self._last_error,
                 latency_ms=self._latency_ms,
+                strength=self._strength,
             )
 
     def _run(self):
@@ -133,35 +145,40 @@ class AlertSender:
             self._connected = True
             self._last_error = None
             self._sent_level = None  # Al reconectar se reenvía el nivel actual.
+            self._sent_strength = None
             # Ese reenvío no cuenta como latencia: el tiempo sin conexión no es envío.
             self._level_changed_at = None
         return True
 
     def _send_next(self):
         with self._condition:
-            # Espera un cambio de nivel; si no llega en 1 s, toca el latido.
+            # Espera un cambio de nivel o de fuerza; si no llega en 1 s, toca el latido.
             self._condition.wait_for(
-                lambda: not self._running or self._level != self._sent_level,
+                lambda: not self._running or self._level != self._sent_level
+                or self._strength != self._sent_strength,
                 timeout=self._heartbeat_interval,
             )
             if not self._running:
                 return
             level = self._level
+            strength = self._strength
             changed_at = self._level_changed_at
-            is_change = level != self._sent_level
+            level_changed = level != self._sent_level
+            is_change = level_changed or strength != self._sent_strength
 
         try:
             if is_change:
-                self.bracelet.send_level(level)
+                self.bracelet.send_level(level, strength)
             else:
-                self.bracelet.send_heartbeat(level)
+                self.bracelet.send_heartbeat(level, strength)
         except BraceletError as error:
             self._mark_disconnected(error)
             return
 
         with self._condition:
             self._sent_level = level
-            if is_change and changed_at is not None:
+            self._sent_strength = strength
+            if level_changed and changed_at is not None:
                 self._latency_ms = (time.monotonic() - changed_at) * 1000
 
     def _mark_disconnected(self, error):
@@ -174,9 +191,15 @@ class AlertSender:
         # Al terminar se apaga el motor, sin esperar los 3 s de RF-09.
         if self._connected:
             try:
-                self.bracelet.send_level(0)
+                self.bracelet.send_level(0, self._strength)
             except BraceletError:
                 pass
         self.bracelet.close()
         with self._condition:
             self._connected = False
+
+
+def _valid_strength(strength):
+    if strength not in STRENGTHS:
+        raise ValueError(f'Fuerza inválida: {strength}. Debe estar entre 1 y 5.')
+    return strength

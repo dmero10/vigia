@@ -13,7 +13,7 @@ import threading
 from bleak import BleakClient, BleakScanner
 from bleak.exc import BleakBluetoothNotAvailableError
 
-from alerts.bracelet import Bracelet, BraceletError
+from alerts.bracelet import DEFAULT_STRENGTH, STRENGTHS, Bracelet, BraceletError
 
 DEVICE_NAME = 'PulseraSomnolencia'
 SERVICE_UUID = '12345678-1234-1234-1234-1234567890ab'
@@ -25,12 +25,18 @@ WRITE_TIMEOUT_S = 1.0  # RF-07: el nivel debe llegar en menos de 1 s.
 DISCONNECT_TIMEOUT_S = 3.0
 
 
-def encode_level(level):
-    """El firmware lee el primer carácter como dígito: el nivel 2 se envía como "2"."""
+def encode_message(level, strength=DEFAULT_STRENGTH):
+    """Dos dígitos ASCII: nivel (0-3) y fuerza (1-5). Nivel 2 con fuerza 3 = "23".
+
+    El firmware anterior sólo lee el primer carácter, así que sigue funcionando
+    (ignora la fuerza). El firmware nuevo usa el segundo para escalar la vibración.
+    """
     if level not in range(4):
         # Un carácter que no sea dígito, el firmware lo tomaría como nivel 4 (vibración continua).
         raise ValueError(f'Nivel inválido: {level}. Debe ser 0, 1, 2 o 3.')
-    return str(level).encode('ascii')
+    if strength not in STRENGTHS:
+        raise ValueError(f'Fuerza inválida: {strength}. Debe estar entre 1 y 5.')
+    return f'{level}{strength}'.encode('ascii')
 
 
 class BleBracelet(Bracelet):
@@ -62,8 +68,8 @@ class BleBracelet(Bracelet):
             return
         self._run(self._connect(), self.scan_timeout + self.connect_timeout + 2)
 
-    def send_level(self, level):
-        data = encode_level(level)
+    def send_level(self, level, strength=DEFAULT_STRENGTH):
+        data = encode_message(level, strength)
         client = self._client
         if client is None or not client.is_connected:
             raise BraceletError('La pulsera está desconectada.')

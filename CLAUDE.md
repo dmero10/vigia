@@ -43,6 +43,11 @@ Capas (Figura 2 del documento):
 - Lógica: `services.py` / módulos de cada app (M1, M2, M3).
 - Infraestructura: `acquisition/camera.py` (OpenCV), `alerts/ble_client.py` (Bleak),
   `monitoring/registry_client.py` (HTTP/JSON a M4 con cola y reintentos).
+- Tiempo real: Django Channels + Daphne (`daphne` primero en INSTALLED_APPS, así
+  `runserver` es ASGI). `monitoring/consumers.py` empuja el estado por WebSocket
+  (`/ws/sesion/`, hasta 10 mensajes/s, sólo si cambió); `monitoring/presenters.py`
+  arma los datos para el WebSocket y la vista JSON de respaldo. El video MJPEG es un
+  generador asíncrono (uno síncrono infinito bloquearía el servidor ASGI).
 
 ## Reglas de arquitectura
 - La captura y el análisis corren en un hilo en segundo plano, **nunca** dentro de
@@ -79,17 +84,27 @@ Capas (Figura 2 del documento):
   EAR = (|p2−p6| + |p3−p5|) / (2·|p1−p4|), promedio de ambos ojos.
   Boca: esquinas (61, 291); verticales (81,178), (13,14), (311,402); MAR = promedio vertical / ancho.
 - No se entrena un modelo propio; MediaPipe ya está entrenado.
+- Varios rostros: el detector busca hasta 3 (`num_faces=3`, `detect_all`). Se mide el
+  más grande (más cercano), pero se sigue midiendo el mismo mientras otro no sea 1.5×
+  más grande (evita saltar entre personas). La vista previa marca en verde el rostro
+  medido y en gris los demás; la interfaz avisa «N rostros». Sin probar con webcam
+  real: comprobar que los FPS no bajan por buscar 3 rostros.
 
 ## Pulsera (verificado en `firmware/pulsera_sticks3_final/pulsera_sticks3_final.ino`)
 M5Stack StickS3 (ESP32-S3) + Unit Vibrator U059 por Grove en G9 (no G1/G2),
 salida 5 V del Grove habilitada, firmware en Arduino IDE, anuncio BLE
 `PulseraSomnolencia`. Servicio `12345678-1234-1234-1234-1234567890ab`,
 característica `abcd1234-5678-90ab-cdef-1234567890ab` (escritura con respuesta).
-Mensaje = nivel como un dígito ASCII (`"2"`); el latido reenvía el nivel cada 1 s.
-El firmware apaga el motor si pasan 3 s sin mensajes (RF-09) y al desconectarse.
-Acepta 0–4 (versión vieja), Python sólo envía 0–3; un carácter no numérico lo
-interpretaría como 4. Necesita USB o powerbank. Siempre debe existir un modo con
-pulsera simulada para la demo.
+Mensaje = dos dígitos ASCII: nivel 0–3 y fuerza 1–5 elegida con el deslizador
+(`"23"`); el latido lo reenvía cada 1 s. El firmware anterior sólo lee el primer
+carácter (compatible). El firmware nuevo escala la intensidad con la fuerza
+(50/62/75/88/100 %), tiene arranque suave del motor, nivel 3 más suave (350/450 ms a
+185), ignora un primer carácter que no sea 0–3 y muestra la causa del último reinicio.
+Apaga el motor si pasan 3 s sin mensajes (RF-09) y al desconectarse.
+Problema conocido: con batería, en nivel 3 se desconectaba y volvía a conectarse
+(hipótesis: caída de voltaje → reinicio «brownout»). El firmware nuevo NO se ha
+compilado ni probado en la pulsera. Siempre debe existir un modo con pulsera
+simulada para la demo.
 
 ## Requisitos clave
 RF-01 video ≥25 FPS · RF-02 medición degradada · RF-03 EAR/MAR por fotograma ·
@@ -119,7 +134,8 @@ Copia de trabajo del Figma: https://www.figma.com/design/mlepvoPoUQvulXCQ78FwE8/
   ble_client.py (Bleak 3.0.2) y comando `check_bracelet [--real]` listos.
   Falta probar con la pulsera real: latencia (RF-07), patrones (RF-08), RF-09, alcance.
 - [x] monitoring: orquestador en hilo (espera los botones del recorrido), vistas,
-  templates del Figma (escala 0–3), video MJPEG en memoria. Probado con la webcam real.
+  templates del Figma (escala 0–3), video MJPEG en memoria, WebSocket. Probado con la
+  webcam real antes de agregar M4 y WebSocket.
   Resumen y CSV se piden a M4; si M4 no responde se usan los datos en memoria.
 - [x] registry_service (M4): FastAPI + SQLite en proceso aparte (puerto 8001), capas
   main.py (API) / services.py (lógica) / repository.py (SQLite), contrato en schemas.py
@@ -130,3 +146,15 @@ Copia de trabajo del Figma: https://www.figma.com/design/mlepvoPoUQvulXCQ78FwE8/
   llegaron al volver a encenderlo. Arranque: `cd registry_service` y
   `python -m uvicorn app.main:app --port 8001` (docs en /docs). Pruebas: `python -m unittest`.
 - [ ] Pruebas de RNF y guion de la demo.
+- Correcciones pedidas en la presentación del avance (semana del 10/11/2026):
+  - [x] WebSocket para los datos en tiempo real (Channels). Probado con cámara simulada.
+  - [x] «Finalizar» en dos pasos: «Finalizar sesión» (monitoreo, medición no disponible,
+    pulsera desconectada) lleva al resumen EN VIVO y la detección y la pulsera siguen;
+    el botón «Finalizar» del resumen lo detiene todo y muestra el resumen de M4.
+    En cámara y calibración, «Finalizar sesión» detiene directamente.
+  - [x] Sesiones de 5 min: el documento no pide una duración mínima; RNF-02 pide 5 min
+    fluidos (≥25 FPS). Se mide tiempo de monitoreo, FPS promedio y mínimo (tras 3 s),
+    se muestran en el resumen y se guardan en M4 (API 1.1, `rnf02_passed`).
+  - [x] Deslizador de fuerza de vibración 1–5 (pantallas pulsera y monitoreo).
+  - [ ] Pulsera que se desconecta en nivel 3 con batería: firmware nuevo listo, falta
+    cargarlo y probarlo con la pulsera real (ver `firmware/README.md`).

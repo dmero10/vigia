@@ -27,10 +27,11 @@ from django.utils import timezone
 
 from acquisition.camera import Camera, CameraError
 from acquisition.validation import FpsMeter, has_enough_light, mean_brightness
+from alerts.bracelet import DEFAULT_STRENGTH, STRENGTHS
 from alerts.services import AlertSender, AlertStatus, create_bracelet
 from analysis.calibration import CALIBRATION_MS, CalibrationError, EarCalibrator
 from analysis.classifier import DrowsinessClassifier
-from analysis.landmarks import FaceLandmarkDetector, LandmarkError
+from analysis.landmarks import FaceLandmarkDetector, LandmarkError, box_area, face_box
 from analysis.metrics import compute_ear, compute_mar
 from monitoring.registry_client import NullRegistry, get_registry_queue
 
@@ -52,7 +53,18 @@ COMMANDS = (COMMAND_CALIBRATE, COMMAND_RECALIBRATE, COMMAND_MONITOR)
 
 PREVIEW_EVERY_N_FRAMES = 2  # La vista previa va a ~15 FPS para no restar FPS al análisis.
 PREVIEW_JPEG_QUALITY = 70
+
+# Varios rostros: se mide el más grande. Para no saltar de una persona a otra, se
+# sigue midiendo el mismo mientras no aparezca otro claramente más grande.
+SWITCH_FACE_RATIO = 1.5
+MAIN_FACE_COLOR = (79, 125, 46)  # BGR del verde de la interfaz (#2e7d4f).
+OTHER_FACE_COLOR = (150, 150, 150)
 STOP_TIMEOUT_S = 10.0
+
+# RNF-02: el procesamiento debe mantenerse fluido en sesiones de al menos 5 minutos.
+RNF02_MIN_MONITORING_S = 300.0
+RNF02_MIN_FPS = 25.0
+FPS_WARMUP_S = 3.0  # Los primeros segundos no cuentan para el mínimo (la ventana se llena).
 
 
 @dataclass(frozen=True)
@@ -85,6 +97,15 @@ class SessionSummary:
     threshold: float | None = None
     events: tuple = ()
     session_id: str | None = None  # Identificador de la sesión en M4.
+    monitoring_s: float = 0.0  # Tiempo en monitoreo activo (sin preparación ni calibración).
+    fps_avg: float | None = None  # FPS promedio durante el monitoreo.
+    fps_min: float | None = None  # Peor FPS de la ventana de 2 s, tras el arranque.
+
+    @property
+    def rnf02_passed(self):
+        """RNF-02: al menos 5 min de monitoreo sin bajar de 25 FPS."""
+        return (self.monitoring_s >= RNF02_MIN_MONITORING_S and self.fps_min is not None
+                and self.fps_min >= RNF02_MIN_FPS)
 
 
 @dataclass(frozen=True)
@@ -97,6 +118,7 @@ class MonitoringState:
     calibration_progress: float = 0.0  # De 0 a 1.
     threshold: float | None = None
     face_detected: bool = False
+    face_count: int = 0  # Rostros en la imagen; se mide sólo uno (recuadro verde).
     light_ok: bool = False
     level: int = 0
     ear: float | None = None
@@ -111,6 +133,10 @@ class MonitoringState:
     bracelet: AlertStatus | None = None
     bracelet_name: str | None = None
     bracelet_simulated: bool = False
+    vibration_strength: int = DEFAULT_STRENGTH  # 1-5, la elige el usuario.
+    monitoring_s: float = 0.0
+    fps_avg: float | None = None
+    fps_min: float | None = None
 
     def as_dict(self):
         return asdict(self)
@@ -122,6 +148,7 @@ class _Measurement:
     ear: float | None
     mar: float | None
     light_ok: bool
+    face_count: int = 0
 
 
 @dataclass
@@ -134,6 +161,18 @@ class _Session:
     last_level: int = 0
     last_degraded: str | None = None
     events: list = field(default_factory=list)
+    monitoring_started: float | None = None  # Reloj monótono al empezar el monitoreo.
+    monitoring_frames: int = 0
+    fps_min: float | None = None
+
+    def monitoring_s(self, now):
+        return 0.0 if self.monitoring_started is None else now - self.monitoring_started
+
+    def fps_avg(self, now):
+        elapsed = self.monitoring_s(now)
+        if elapsed <= 0 or not self.monitoring_frames:
+            return None
+        return self.monitoring_frames / elapsed
 
 
 class Orchestrator:
@@ -157,6 +196,8 @@ class Orchestrator:
         self._sender = None
         self._preview = None
         self._fps = FpsMeter()
+        self._strength = DEFAULT_STRENGTH
+        self._main_center = None  # Centro del rostro medido en el fotograma anterior.
 
     # ---------- Lo que usan las vistas ----------
 
@@ -176,7 +217,8 @@ class Orchestrator:
             self._sender = None
             self._preview = None
             self._fps = FpsMeter()
-            self._state = MonitoringState(phase=PHASE_STARTING)
+            self._main_center = None
+            self._state = MonitoringState(phase=PHASE_STARTING, vibration_strength=self._strength)
             session = self._session
             self._thread = threading.Thread(target=self._run, name='monitoring', daemon=True)
             self._thread.start()
@@ -198,6 +240,18 @@ class Orchestrator:
             raise ValueError(f'Comando desconocido: {command}')
         with self._lock:
             self._command = command
+
+    def set_strength(self, strength):
+        """Deslizador de fuerza (1-5): escala la vibración de todos los niveles.
+        Sirve antes y durante la sesión; se envía a la pulsera al momento."""
+        if strength not in STRENGTHS:
+            raise ValueError(f'Fuerza inválida: {strength}. Debe estar entre 1 y 5.')
+        with self._lock:
+            self._strength = strength
+            sender = self._sender
+            self._state = _replace(self._state, vibration_strength=strength)
+        if sender is not None:
+            sender.set_strength(strength)
 
     def retry_bracelet(self):
         """Botón «Reconectar pulsera»: reintenta ya, sin esperar el próximo intento."""
@@ -229,12 +283,28 @@ class Orchestrator:
             updates['bracelet_name'] = sender.bracelet.name
             updates['bracelet_simulated'] = hasattr(sender.bracelet, 'set_available')
         if session is not None and state.phase not in (PHASE_IDLE, PHASE_FINISHED, PHASE_ERROR):
-            updates['elapsed_s'] = time.monotonic() - session.started_monotonic
+            now = time.monotonic()
+            updates['elapsed_s'] = now - session.started_monotonic
+            updates['monitoring_s'] = session.monitoring_s(now)
+            updates['fps_avg'] = session.fps_avg(now)
+            updates['fps_min'] = session.fps_min
         return _replace(state, **updates)
 
     def summary(self):
+        """Resumen final, cuando la sesión ya terminó (o None)."""
         with self._lock:
             return self._summary
+
+    def live_summary(self):
+        """Resumen parcial mientras el monitoreo sigue (primer «Finalizar sesión»).
+        Devuelve None si no hay una sesión en monitoreo."""
+        if not self.is_running:
+            return None
+        with self._lock:
+            session = self._session
+            if session is None or session.monitoring_started is None:
+                return None
+            return self._build_summary(session, timezone.now())
 
     def latest_jpeg(self):
         """Último fotograma en JPEG (sólo en memoria), o None si no hay sesión."""
@@ -247,7 +317,9 @@ class Orchestrator:
         sender = None
         try:
             # La pulsera se conecta primero: así tiene tiempo mientras se ve la cámara.
-            sender = AlertSender(self._bracelet_factory(self._bracelet_mode))
+            sender = AlertSender(
+                self._bracelet_factory(self._bracelet_mode), strength=self._strength
+            )
             sender.start()
             with self._lock:
                 self._sender = sender
@@ -319,9 +391,12 @@ class Orchestrator:
         self._set_state(phase=PHASE_MONITORING)
         classifier = DrowsinessClassifier(threshold)
         frame_index = 0
+        with self._lock:
+            self._session.monitoring_started = time.monotonic()
         while not self._stop_event.is_set():
             measurement = self._measure(camera, detector, frame_index)
             frame_index += 1
+            self._track_fps()
             assessment = classifier.update(
                 measurement.timestamp_ms, measurement.ear, measurement.mar, measurement.light_ok
             )
@@ -344,33 +419,80 @@ class Orchestrator:
         frame = camera.read()
         self._fps.tick()
         light_ok = has_enough_light(mean_brightness(frame.image))
-        landmarks = detector.detect(frame.image, frame.timestamp_ms)
+        faces = _detect_faces(detector, frame.image, frame.timestamp_ms)
+        main = self._pick_main_face(faces)
         if frame_index % PREVIEW_EVERY_N_FRAMES == 0:
-            self._publish_preview(frame.image)
-        if landmarks is None:
-            return _Measurement(frame.timestamp_ms, None, None, light_ok)
+            self._publish_preview(frame.image, faces, main)
+        if main is None:
+            return _Measurement(frame.timestamp_ms, None, None, light_ok, 0)
+        landmarks = faces[main]
         return _Measurement(
-            frame.timestamp_ms, compute_ear(landmarks), compute_mar(landmarks), light_ok
+            frame.timestamp_ms, compute_ear(landmarks), compute_mar(landmarks), light_ok,
+            len(faces),
         )
+
+    def _pick_main_face(self, faces):
+        """Índice del rostro que se mide: el más grande, salvo que el que ya se medía
+        siga ahí y no haya otro claramente más grande (evita saltar entre personas)."""
+        if not faces:
+            self._main_center = None
+            return None
+        boxes = [face_box(face) for face in faces]
+        areas = [box_area(box) for box in boxes]
+        largest = max(range(len(faces)), key=areas.__getitem__)
+        main = largest
+        if self._main_center is not None and len(faces) > 1:
+            cx, cy = self._main_center
+            nearest = min(range(len(faces)), key=lambda i: (
+                ((boxes[i][0] + boxes[i][2]) / 2 - cx) ** 2
+                + ((boxes[i][1] + boxes[i][3]) / 2 - cy) ** 2))
+            if areas[largest] < areas[nearest] * SWITCH_FACE_RATIO:
+                main = nearest
+        x0, y0, x1, y1 = boxes[main]
+        self._main_center = ((x0 + x1) / 2, (y0 + y1) / 2)
+        return main
 
     def _show(self, measurement, **changes):
         self._set_state(
             ear=measurement.ear,
             mar=measurement.mar,
             face_detected=measurement.ear is not None,
+            face_count=measurement.face_count,
             light_ok=measurement.light_ok,
             fps=self._fps.fps,
             **changes,
         )
 
-    def _publish_preview(self, image):
+    def _publish_preview(self, image, faces=(), main=None):
         # Se refleja como un espejo, que es lo natural al verse en la pantalla.
+        # Los recuadros sólo se dibujan en esta copia en memoria (RNF-05).
+        mirrored = cv2.flip(image, 1)
+        width = mirrored.shape[1]
+        for index, face in enumerate(faces):
+            x0, y0, x1, y1 = face_box(face)
+            left, right = int(width - x1), int(width - x0)  # Coordenadas en espejo.
+            is_main = index == main
+            color = MAIN_FACE_COLOR if is_main else OTHER_FACE_COLOR
+            cv2.rectangle(mirrored, (left, int(y0)), (right, int(y1)), color, 2 if is_main else 1)
+            if len(faces) > 1:
+                label = 'Rostro medido' if is_main else 'No se mide'
+                cv2.putText(mirrored, label, (left, max(14, int(y0) - 6)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
         ok, encoded = cv2.imencode(
-            '.jpg', cv2.flip(image, 1), [cv2.IMWRITE_JPEG_QUALITY, PREVIEW_JPEG_QUALITY]
+            '.jpg', mirrored, [cv2.IMWRITE_JPEG_QUALITY, PREVIEW_JPEG_QUALITY]
         )
         if ok:
             with self._lock:
                 self._preview = encoded.tobytes()
+
+    def _track_fps(self):
+        """RNF-02: cuenta fotogramas y guarda el peor FPS tras el arranque."""
+        fps = self._fps.fps
+        with self._lock:
+            session = self._session
+            session.monitoring_frames += 1
+            if session.monitoring_s(time.monotonic()) >= FPS_WARMUP_S:
+                session.fps_min = fps if session.fps_min is None else min(session.fps_min, fps)
 
     def _record(self, assessment, measurement):
         """RF-11: guarda cada cambio de nivel o de medición y lo encola para M4."""
@@ -399,27 +521,44 @@ class Orchestrator:
     def _fail(self, message):
         self._set_state(phase=PHASE_ERROR, error=message)
 
+    def _build_summary(self, session, ended_at):
+        """Arma el resumen. Llamar con el candado tomado."""
+        now = time.monotonic()
+        avg = session.fps_avg(now)
+        return SessionSummary(
+            started_at=session.started_at,
+            ended_at=ended_at,
+            duration_s=now - session.started_monotonic,
+            alert_count=session.alert_count,
+            max_level=session.max_level,
+            threshold=self._state.threshold,
+            events=tuple(session.events),
+            session_id=session.id,
+            monitoring_s=session.monitoring_s(now),
+            fps_avg=None if avg is None else round(avg, 1),
+            fps_min=None if session.fps_min is None else round(session.fps_min, 1),
+        )
+
     def _finish(self):
         with self._lock:
-            session = self._session
-            duration_s = time.monotonic() - session.started_monotonic
-            self._summary = SessionSummary(
-                started_at=session.started_at,
-                ended_at=timezone.now(),
-                duration_s=duration_s,
-                alert_count=session.alert_count,
-                max_level=session.max_level,
-                threshold=self._state.threshold,
-                events=tuple(session.events),
-                session_id=session.id,
-            )
+            self._summary = self._build_summary(self._session, timezone.now())
             summary = self._summary
             phase = PHASE_ERROR if self._state.phase == PHASE_ERROR else PHASE_FINISHED
-            self._state = _replace(self._state, phase=phase, level=0, elapsed_s=duration_s)
+            self._state = _replace(self._state, phase=phase, level=0, elapsed_s=summary.duration_s)
             self._preview = None
         self._registry.finish_session(
-            summary.session_id, summary.ended_at, _rounded(summary.threshold)
+            summary.session_id, summary.ended_at, _rounded(summary.threshold),
+            stats={'monitoring_s': round(summary.monitoring_s, 1),
+                   'fps_avg': summary.fps_avg, 'fps_min': summary.fps_min},
         )
+
+
+def _detect_faces(detector, image, timestamp_ms):
+    """Todos los rostros; con un detector que sólo da uno (pruebas), una lista de 0 o 1."""
+    if hasattr(detector, 'detect_all'):
+        return list(detector.detect_all(image, timestamp_ms))
+    landmarks = detector.detect(image, timestamp_ms)
+    return [] if landmarks is None else [landmarks]
 
 
 def _rounded(value):

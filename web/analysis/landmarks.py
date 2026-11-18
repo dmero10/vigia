@@ -20,6 +20,9 @@ MODEL_URL = (
 # No se sube a Git: se descarga la primera vez que se necesita.
 MODEL_PATH = Path(__file__).resolve().parent / 'models' / 'face_landmarker.task'
 
+# Se buscan varios rostros para saber cuál se mide y avisar si hay más de uno.
+MAX_FACES = 3
+
 
 class LandmarkError(Exception):
     """No se pudo obtener o cargar el modelo de MediaPipe."""
@@ -51,29 +54,52 @@ def to_pixels(face_landmarks, width, height):
     return np.array([(point.x * width, point.y * height) for point in face_landmarks])
 
 
-class FaceLandmarkDetector:
-    """Detecta un rostro por fotograma. Crear y usar siempre desde el mismo hilo."""
+def face_box(points):
+    """Recuadro (x0, y0, x1, y1) en píxeles que encierra los puntos de un rostro."""
+    x0, y0 = points.min(axis=0)
+    x1, y1 = points.max(axis=0)
+    return float(x0), float(y0), float(x1), float(y1)
 
-    def __init__(self, model_path=None):
+
+def box_area(box):
+    x0, y0, x1, y1 = box
+    return max(0.0, x1 - x0) * max(0.0, y1 - y0)
+
+
+def largest_face(faces):
+    """Índice del rostro más grande (el más cercano a la cámara), o None."""
+    if not faces:
+        return None
+    return max(range(len(faces)), key=lambda index: box_area(face_box(faces[index])))
+
+
+class FaceLandmarkDetector:
+    """Detecta hasta MAX_FACES rostros por fotograma. Crear y usar desde el mismo hilo."""
+
+    def __init__(self, model_path=None, max_faces=MAX_FACES):
         options = vision.FaceLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=str(ensure_model(model_path or MODEL_PATH))),
             running_mode=vision.RunningMode.VIDEO,
-            num_faces=1,
+            num_faces=max_faces,
         )
         self._landmarker = vision.FaceLandmarker.create_from_options(options)
 
-    def detect(self, image, timestamp_ms):
-        """Devuelve los puntos del rostro en píxeles, o None si no hay rostro.
+    def detect_all(self, image, timestamp_ms):
+        """Devuelve los puntos de cada rostro en píxeles (lista vacía si no hay).
 
         `image` es BGR, y `timestamp_ms` debe ser estrictamente creciente.
         """
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         result = self._landmarker.detect_for_video(mp_image, timestamp_ms)
-        if not result.face_landmarks:
-            return None
         height, width = image.shape[:2]
-        return to_pixels(result.face_landmarks[0], width, height)
+        return [to_pixels(face, width, height) for face in result.face_landmarks]
+
+    def detect(self, image, timestamp_ms):
+        """Puntos del rostro más grande en píxeles, o None si no hay rostro."""
+        faces = self.detect_all(image, timestamp_ms)
+        index = largest_face(faces)
+        return None if index is None else faces[index]
 
     def close(self):
         self._landmarker.close()

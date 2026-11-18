@@ -12,7 +12,7 @@ from alerts.ble_client import (
     LEVEL_CHARACTERISTIC_UUID,
     SERVICE_UUID,
     BleBracelet,
-    encode_level,
+    encode_message,
 )
 from alerts.bracelet import BraceletError, SimulatedBracelet
 from alerts.services import AlertSender, create_bracelet
@@ -136,6 +136,31 @@ class AlertSenderTests(SimpleTestCase):
             with self.assertRaises(ValueError):
                 self.sender.set_level(level)
 
+    def test_strength_change_is_sent_at_once_with_the_level(self):
+        self.start_connected()
+        self.sender.set_level(2)
+        self.assertTrue(wait_until(lambda: self.sender.status().sent_level == 2))
+        self.sender.set_strength(5)
+        self.assertTrue(wait_until(
+            lambda: [(m.level, m.strength) for m in self.bracelet.messages()
+                     if m.kind == 'level'][-1] == (2, 5)
+        ))
+        self.assertEqual(self.sender.status().strength, 5)
+        self.assertEqual(self.bracelet.strength, 5)
+
+    def test_heartbeat_carries_the_strength(self):
+        self.sender.set_strength(1)
+        self.start_connected()
+        self.assertTrue(wait_until(
+            lambda: any(m.kind == 'heartbeat' for m in self.bracelet.messages())
+        ))
+        self.assertTrue(all(m.strength == 1 for m in self.bracelet.messages()))
+
+    def test_invalid_strength_raises(self):
+        for strength in (0, 6):
+            with self.assertRaises(ValueError):
+                self.sender.set_strength(strength)
+
     def test_retries_until_bracelet_is_available(self):
         self.bracelet.set_available(False)
         self.sender.start()
@@ -233,15 +258,25 @@ def advertisement(name=None, uuids=()):
     return SimpleNamespace(local_name=name, service_uuids=list(uuids))
 
 
-class EncodeLevelTests(SimpleTestCase):
-    def test_levels_are_single_ascii_digits(self):
-        self.assertEqual([encode_level(level) for level in range(4)], [b'0', b'1', b'2', b'3'])
+class EncodeMessageTests(SimpleTestCase):
+    def test_level_then_strength_as_ascii_digits(self):
+        self.assertEqual([encode_message(level, 3) for level in range(4)],
+                         [b'03', b'13', b'23', b'33'])
+        self.assertEqual(encode_message(2, 1), b'21')
+        self.assertEqual(encode_message(2, 5), b'25')
 
-    def test_invalid_levels_are_rejected(self):
+    def test_first_character_is_still_the_level(self):
+        """El firmware anterior sólo lee el primer carácter: debe seguir siendo el nivel."""
+        self.assertEqual(encode_message(3, 5)[:1], b'3')
+
+    def test_invalid_values_are_rejected(self):
         # El firmware tomaría cualquier otro carácter como nivel 4 (vibración continua).
         for level in (-1, 4, 10):
             with self.assertRaises(ValueError):
-                encode_level(level)
+                encode_message(level, 3)
+        for strength in (0, 6, 10):
+            with self.assertRaises(ValueError):
+                encode_message(1, strength)
 
 
 class BleBraceletTests(SimpleTestCase):
@@ -269,9 +304,9 @@ class BleBraceletTests(SimpleTestCase):
         self.bracelet.connect()
         self.assertTrue(self.bracelet.is_connected)
         self.assertEqual(self.bracelet.address, 'AA:BB:CC:DD:EE:FF')
-        self.bracelet.send_level(2)
-        self.bracelet.send_heartbeat(2)
-        expected = (LEVEL_CHARACTERISTIC_UUID, b'2', True)
+        self.bracelet.send_level(2, 4)
+        self.bracelet.send_heartbeat(2, 4)
+        expected = (LEVEL_CHARACTERISTIC_UUID, b'24', True)
         self.assertEqual(self.clients[0].writes, [expected, expected])
 
     def test_bracelet_not_found(self):
@@ -338,5 +373,5 @@ class BleBraceletTests(SimpleTestCase):
         self.assertTrue(wait_until(lambda: sender.status().sent_level == 3))
         sender.stop()
         sent = [data for _, data, _ in self.clients[0].writes]
-        self.assertEqual(sent[-1], b'0')
-        self.assertIn(b'3', sent)
+        self.assertEqual(sent[-1], b'03')  # Nivel 0 con la fuerza por defecto (3).
+        self.assertIn(b'33', sent)

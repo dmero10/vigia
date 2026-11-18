@@ -136,8 +136,11 @@ class RegistryQueue:
         payload['at'] = payload['at'].isoformat()
         self._put(OP_EVENT, session_id, payload)
 
-    def finish_session(self, session_id, ended_at, threshold=None):
-        self._put(OP_FINISH, session_id, {'ended_at': ended_at.isoformat(), 'threshold': threshold})
+    def finish_session(self, session_id, ended_at, threshold=None, stats=None):
+        """`stats`: monitoring_s, fps_avg y fps_min (evidencia de RNF-02)."""
+        payload = {'ended_at': ended_at.isoformat(), 'threshold': threshold}
+        payload.update(stats or {})
+        self._put(OP_FINISH, session_id, payload)
 
     # ---------- Lo que usan las vistas ----------
 

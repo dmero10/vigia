@@ -52,6 +52,9 @@ cd web
 python manage.py runserver
 ```
 
+Django usa **Daphne** (servidor ASGI) para que funcione el WebSocket: `runserver` lo usa
+solo. Al arrancar debe decir «Starting ASGI/Daphne…».
+
 Abrir http://127.0.0.1:8000. La documentación interactiva de M4 está en
 http://127.0.0.1:8001/docs. Para comprobar M4 desde `web`: `python manage.py check_registry`.
 
@@ -78,6 +81,13 @@ Usan cámara, rostro y pulsera simulados: no necesitan webcam ni hardware.
 - **Pantallas:** recorrido completo del Figma, con video en memoria (nunca se guardan imágenes).
 - **M4:** sesiones, eventos con EAR/MAR, resumen y CSV. Django envía los datos desde una
   cola con confirmaciones y reintentos que no frena la alerta a la pulsera.
+- **Tiempo real por WebSocket** (Django Channels): el servidor empuja el estado a la página.
+- **Finalizar en dos pasos:** «Finalizar sesión» muestra el resumen en vivo mientras la
+  detección sigue; «Finalizar» lo detiene todo.
+- **Prueba de 5 minutos (RNF-02):** el resumen muestra FPS promedio y mínimo y si se
+  cumplieron 5 min de monitoreo sin bajar de 25 FPS (también queda en M4).
+- **Fuerza de vibración:** deslizador 1–5 que escala todos los niveles. El mensaje BLE pasa
+  a dos dígitos (nivel y fuerza).
 
 Medido hasta ahora:
 
@@ -91,6 +101,9 @@ Medido hasta ahora:
 **Probar M4 con la webcam real.** Con M4 y Django encendidos, hacer una sesión y confirmar
 que el resumen dice «Datos guardados en el servicio de registro (M4)». Luego apagar M4
 (Ctrl+C) a mitad de otra sesión, provocar una alerta, encenderlo otra vez y finalizar.
+
+**Firmware nuevo de la pulsera** (fuerza, arranque suave, diagnóstico): cargarlo y probar
+si sigue desconectándose en nivel 3 con batería. Ver [firmware/README.md](firmware/README.md).
 
 **Con la pulsera real.** Ver [firmware/README.md](firmware/README.md); la primera comprobación
 es, desde `web`, `python manage.py check_bracelet --real`. Nada de esto se ha medido todavía:

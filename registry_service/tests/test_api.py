@@ -196,6 +196,56 @@ class SummaryTests(ApiTestCase):
         self.assertEqual(lines[5], '2026-11-10 10:00:40,0,Medición no disponible (Rostro no detectado),,')
 
 
+class Rnf02Tests(ApiTestCase):
+    """RNF-02: evidencia de 5 minutos de monitoreo sin bajar de 25 FPS."""
+
+    def setUp(self):
+        super().setUp()
+        self.create_session()
+
+    def finish_with(self, monitoring_s, fps_min):
+        return self.client.post(f'/api/v1/sessions/{SESSION}/finish', json={
+            'ended_at': iso(400), 'threshold': 0.2,
+            'monitoring_s': monitoring_s, 'fps_avg': 29.6, 'fps_min': fps_min})
+
+    def summary(self):
+        return self.client.get(f'/api/v1/sessions/{SESSION}/summary').json()
+
+    def test_passed(self):
+        self.assertEqual(self.finish_with(312.5, 27.0).status_code, 200)
+        summary = self.summary()
+        self.assertTrue(summary['rnf02_passed'])
+        self.assertEqual((summary['monitoring_s'], summary['fps_avg'], summary['fps_min']),
+                         (312.5, 29.6, 27.0))
+
+    def test_too_short_or_too_slow(self):
+        self.finish_with(120.0, 29.0)
+        self.assertFalse(self.summary()['rnf02_passed'])
+        self.finish_with(310.0, 22.5)
+        self.assertFalse(self.summary()['rnf02_passed'])
+
+    def test_unknown_without_stats(self):
+        """Un cliente con el contrato 1.0 no manda FPS: no se puede decir si cumplió."""
+        self.finish()
+        self.assertIsNone(self.summary()['rnf02_passed'])
+
+    def test_old_database_gets_the_new_columns(self):
+        import sqlite3
+        old_db = self.db_path.with_name('vieja.sqlite3')
+        with sqlite3.connect(old_db) as connection:
+            connection.executescript(
+                'CREATE TABLE sessions (id TEXT PRIMARY KEY, started_at TEXT NOT NULL, '
+                'ended_at TEXT, bracelet_mode TEXT, threshold REAL, created_at TEXT NOT NULL);'
+                "INSERT INTO sessions VALUES ('sesion-vieja', '2026-11-01T10:00:00.000000+00:00',"
+                " NULL, NULL, NULL, '2026-11-01T10:00:00.000000+00:00');")
+        connection.close()
+        self.db_path = old_db
+        client = self.open_client()
+        response = client.get('/api/v1/sessions/sesion-vieja/summary')
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()['fps_min'])
+
+
 class ComputeSummaryTests(unittest.TestCase):
     def test_without_events(self):
         session = {'id': 's', 'started_at': START, 'ended_at': START + timedelta(seconds=5),

@@ -7,6 +7,7 @@
 {% block content %}
 <div id="session"
      data-state-url="{% url 'monitoring:state' %}"
+     data-socket-path="/ws/sesion/"
      data-command-url="{% url 'monitoring:command' %}"
      data-video-url="{% url 'monitoring:video' %}"
      data-summary-url="{% url 'monitoring:summary' %}"
@@ -27,7 +28,7 @@
         <p class="label">Antes de empezar</p>
         <ul class="checklist">
           <li id="chk-camera" class="wait"><span class="mark"></span><div><strong>Cámara detectada</strong><span data-text>Abriendo la cámara…</span></div></li>
-          <li id="chk-face" class="wait"><span class="mark"></span><div><strong>Rostro detectado</strong><span>Mira de frente a la cámara.</span></div></li>
+          <li id="chk-face" class="wait"><span class="mark"></span><div><strong>Rostro detectado</strong><span data-text>Mira de frente a la cámara.</span></div></li>
           <li id="chk-light" class="wait"><span class="mark"></span><div><strong>Luz suficiente</strong><span>Evita estar a contraluz.</span></div></li>
         </ul>
         <div class="notice warn" id="camera-notice" hidden>{% include "monitoring/icons/warn.svg" %}<span data-text></span></div>
@@ -53,6 +54,7 @@
           <li class="ok"><span class="mark"></span><div><strong>Vibración por nivel</strong><span>Patrón distinto para los niveles 1, 2 y 3.</span></div></li>
           <li class="ok"><span class="mark"></span><div><strong>Apagado automático</strong><span>Tras 3 s sin señal, la vibración se detiene.</span></div></li>
         </ul>
+        {% include "monitoring/_strength.html" %}
       </div>
     </div>
     <div class="actions">
@@ -120,6 +122,7 @@
           <strong>{% include "monitoring/icons/bluetooth.svg" %}<span data-title>Pulsera conectada</span></strong>
           <span data-text>Vibración configurada</span>
         </div>
+        {% include "monitoring/_strength.html" %}
       </div>
       <div>
         {% include "monitoring/_camera.html" %}
@@ -131,7 +134,7 @@
       </div>
     </div>
     <div class="actions">
-      <button class="btn btn-secondary" type="submit" form="finish-form">Finalizar sesión</button>
+      <a class="btn btn-secondary" href="{% url 'monitoring:summary' %}">Finalizar sesión</a>
       <div class="right">
         <button class="btn-link" type="button" data-command="simulate_disconnect" data-simulated-only hidden>Simular desconexión de la pulsera</button>
         <span class="footnote" id="monitor-footnote">Cámara conectada · medición disponible</span>
@@ -156,7 +159,7 @@
       </div>
     </div>
     <div class="actions">
-      <button class="btn btn-secondary" type="submit" form="finish-form">Finalizar sesión</button>
+      <a class="btn btn-secondary" href="{% url 'monitoring:summary' %}">Finalizar sesión</a>
       <span class="footnote">El monitoreo se reanuda solo al recuperar la medición.</span>
     </div>
   </section>
@@ -177,7 +180,7 @@
       </div>
     </div>
     <div class="actions">
-      <button class="btn btn-secondary" type="submit" form="finish-form">Finalizar sesión</button>
+      <a class="btn btn-secondary" href="{% url 'monitoring:summary' %}">Finalizar sesión</a>
       <div class="right">
         <button class="btn-link" type="button" data-command="simulate_reconnect" data-simulated-only hidden>Simular reconexión</button>
         <button class="btn btn-primary" type="button" data-command="reconnect">Reconectar pulsera {% include "monitoring/icons/arrow.svg" %}</button>

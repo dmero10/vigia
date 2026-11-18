@@ -32,6 +32,8 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',  # Servidor ASGI: permite WebSocket con runserver.
+    'channels',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -134,3 +136,6 @@ BRACELET_MODE = 'simulated'
 # VIGÍA: dirección del microservicio de registro M4 (registry_service).
 # Se puede cambiar con la variable de entorno VIGIA_REGISTRY_URL.
 REGISTRY_URL = os.environ.get('VIGIA_REGISTRY_URL', 'http://127.0.0.1:8001')
+
+# VIGÍA: WebSocket (Django Channels) para los datos de la sesión en tiempo real.
+ASGI_APPLICATION = 'vigia.asgi.application'

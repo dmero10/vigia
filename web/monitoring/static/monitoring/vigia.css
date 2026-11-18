@@ -266,3 +266,19 @@ td { padding: 10px 12px; border-bottom: 1px solid var(--line); font-variant-nume
 }
 
 .registry-note { margin: 12px 0 0; }
+
+/* Deslizador de fuerza de vibración (pantallas de pulsera y monitoreo). */
+.strength { margin-top: 18px; }
+.strength-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; }
+.strength-head .label, .strength-head strong { white-space: nowrap; }
+.strength-head strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+.strength input[type="range"] { width: 100%; margin: 10px 0 4px; accent-color: var(--blue); cursor: pointer; }
+.strength-scale { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+.level-card .strength { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(27, 38, 64, .08); }
+
+/* Resumen en vivo (primer «Finalizar sesión»: el monitoreo sigue). */
+.notice.live { background: var(--blue-soft); color: var(--navy); align-items: center; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex: none; animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.fps-line { margin: -6px 0 16px; }
+.actions form { display: contents; }

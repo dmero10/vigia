@@ -12,6 +12,8 @@ from app.schemas import BatchResult, EventOut, SessionOut, SummaryOut
 LEVEL_NAMES = {0: 'Sin indicios', 1: 'Señal inicial', 2: 'Atención reducida', 3: 'Riesgo alto'}
 DEGRADED_NAMES = {'low_light': 'Poca luz', 'no_face': 'Rostro no detectado'}
 CSV_HEADER = ['hora', 'nivel', 'estado', 'ear', 'mar']
+RNF02_MIN_MONITORING_S = 300.0  # RNF-02: sesiones de al menos 5 minutos...
+RNF02_MIN_FPS = 25.0  # ...sin bajar de 25 FPS.
 
 
 class SessionNotFound(Exception):
@@ -34,6 +36,10 @@ def compute_summary(session, events, now=None):
         previous = event['level']
     end = session['ended_at'] or now or datetime.now(timezone.utc)
     max_level = max((event['level'] for event in events), default=0)
+    monitoring_s, fps_min = session.get('monitoring_s'), session.get('fps_min')
+    rnf02 = None
+    if monitoring_s is not None and fps_min is not None:
+        rnf02 = monitoring_s >= RNF02_MIN_MONITORING_S and fps_min >= RNF02_MIN_FPS
     return SummaryOut(
         session_id=session['id'],
         started_at=session['started_at'],
@@ -45,6 +51,10 @@ def compute_summary(session, events, now=None):
         max_level_name=LEVEL_NAMES[max_level],
         threshold=session['threshold'],
         event_count=len(events),
+        monitoring_s=monitoring_s,
+        fps_avg=session.get('fps_avg'),
+        fps_min=fps_min,
+        rnf02_passed=rnf02,
     )
 
 
@@ -59,7 +69,11 @@ class RegistryService:
         return self.get_session(data.id), created
 
     def finish_session(self, session_id, data):
-        if not self.repository.finish_session(session_id, data.ended_at, data.threshold):
+        finished = self.repository.finish_session(
+            session_id, data.ended_at, data.threshold,
+            monitoring_s=data.monitoring_s, fps_avg=data.fps_avg, fps_min=data.fps_min,
+        )
+        if not finished:
             raise SessionNotFound(session_id)
         return self.get_session(session_id)
 

@@ -373,16 +373,21 @@ class ViewTests(OrchestratorTestCase):
         self.client.post(url, {'action': 'simulate_reconnect'})
         self.assertTrue(wait_until(lambda: self.orchestrator.state().bracelet.connected))
 
-    def test_video_stream_sends_jpeg_frames(self):
-        self.orchestrator.start()
-        self.assertTrue(wait_until(lambda: self.orchestrator.latest_jpeg() is not None))
-        response = self.client.get(reverse('monitoring:video'))
+    async def test_video_stream_sends_jpeg_frames(self):
+        """El video es un generador asíncrono: con Daphne no ocupa el hilo de las vistas."""
+        from asgiref.sync import sync_to_async
+        from django.test import AsyncClient
+
+        await sync_to_async(self.orchestrator.start)()
+        has_frame = await sync_to_async(wait_until)(
+            lambda: self.orchestrator.latest_jpeg() is not None)
+        self.assertTrue(has_frame)
+        response = await AsyncClient().get(reverse('monitoring:video'))
         self.assertTrue(response['Content-Type'].startswith('multipart/x-mixed-replace'))
-        chunk = next(iter(response.streaming_content))
+        chunk = await anext(aiter(response.streaming_content))
         self.assertTrue(chunk.startswith(b'--frame'))
         self.assertIn(b'\xff\xd8', chunk)
-        self.orchestrator.stop()
-        response.close()
+        await sync_to_async(self.orchestrator.stop)()
 
     def test_finish_shows_summary_and_csv(self):
         self.finish_session()
@@ -440,8 +445,9 @@ class RecordingRegistry:
     def add_event(self, session_id, event):
         self.calls.append(('event', session_id, event))
 
-    def finish_session(self, session_id, ended_at, threshold=None):
+    def finish_session(self, session_id, ended_at, threshold=None, stats=None):
         self.calls.append(('finish', session_id, threshold))
+        self.stats = stats
 
 
 class FakeRemoteClient:
@@ -495,3 +501,228 @@ class OrchestratorRegistryTests(OrchestratorTestCase):
         self.assertEqual(events[0]['mar'], 0.0)
         self.assertEqual(len({event['id'] for event in events}), 3)
         self.assertNotIn('image', events[0])  # RNF-05: sólo métricas.
+
+
+# ---------- Fuerza de vibración, «Finalizar» en dos pasos y RNF-02 ----------
+
+class StrengthTests(OrchestratorTestCase):
+    def test_strength_reaches_the_bracelet_during_the_session(self):
+        orchestrator = self.make()
+        self.run_to_monitoring(orchestrator)
+        self.assertEqual(orchestrator.state().vibration_strength, 3)
+        orchestrator.set_strength(5)
+        self.assertTrue(wait_until(lambda: self.bracelet.strength == 5))
+        self.assertEqual(orchestrator.state().vibration_strength, 5)
+        self.assertEqual(orchestrator.state().bracelet.strength, 5)
+
+    def test_strength_chosen_before_starting_is_used(self):
+        orchestrator = self.make()
+        orchestrator.set_strength(1)
+        orchestrator.start()
+        self.assertTrue(wait_until(lambda: self.bracelet.messages() != []))
+        self.assertEqual(self.bracelet.messages()[0].strength, 1)
+
+    def test_invalid_strength_raises(self):
+        with self.assertRaises(ValueError):
+            self.make().set_strength(7)
+
+
+class Rnf02StatsTests(OrchestratorTestCase):
+    def test_monitoring_time_and_fps_are_measured(self):
+        orchestrator = self.make()
+        self.run_to_monitoring(orchestrator)
+        time.sleep(0.2)
+        orchestrator.stop()
+        summary = orchestrator.summary()
+        self.assertGreater(summary.monitoring_s, 0)
+        self.assertLess(summary.monitoring_s, summary.duration_s)  # Sin preparar ni calibrar.
+        self.assertIsNotNone(summary.fps_avg)
+        self.assertFalse(summary.rnf02_passed)  # Mucho menos de 5 minutos.
+        self.assertEqual(set(self.registry.stats), {'monitoring_s', 'fps_avg', 'fps_min'})
+
+    def test_rnf02_rule(self):
+        from monitoring.orchestrator import SessionSummary
+        from django.utils import timezone
+        now = timezone.now()
+
+        def summary(monitoring_s, fps_min):
+            return SessionSummary(now, now, monitoring_s + 20, 0, 0,
+                                  monitoring_s=monitoring_s, fps_min=fps_min)
+
+        self.assertTrue(summary(300, 25.0).rnf02_passed)
+        self.assertFalse(summary(299, 30.0).rnf02_passed)
+        self.assertFalse(summary(600, 24.9).rnf02_passed)
+        self.assertFalse(summary(600, None).rnf02_passed)
+
+    def test_rnf02_text(self):
+        from monitoring.presenters import rnf02_text
+        self.assertIn('cumplida', rnf02_text(310, 27))
+        self.assertIn('faltan 3.0 min', rnf02_text(120, 29))
+        self.assertIn('no cumplida', rnf02_text(310, 20))
+        self.assertIn('sin datos', rnf02_text(0, None))
+
+
+class TwoStepFinishTests(ViewTests):
+    """Primer «Finalizar sesión»: resumen en vivo con el monitoreo activo.
+    Botón «Finalizar»: lo detiene todo."""
+
+    def test_summary_while_monitoring_is_live_and_keeps_running(self):
+        self.run_to_monitoring(self.orchestrator)
+        self.face = CLOSED_FACE
+        self.assertTrue(wait_until(lambda: self.orchestrator.state().level >= 1, timeout=10))
+
+        response = self.client.get(reverse('monitoring:summary'))
+        self.assertTrue(response.context['live'])
+        self.assertContains(response, 'Monitoreo en curso')
+        self.assertContains(response, 'Volver al monitoreo')
+        self.assertContains(response, reverse('monitoring:finish'))
+        self.assertNotContains(response, 'Exportar CSV')
+        self.assertGreaterEqual(response.context['summary']['alert_count'], 1)
+        time.sleep(0.1)
+        self.assertTrue(self.orchestrator.is_running)  # La detección sigue.
+        self.assertEqual(self.orchestrator.state().phase, PHASE_MONITORING)
+
+        # El CSV se exporta al finalizar del todo.
+        self.assertRedirects(self.client.get(reverse('monitoring:summary_csv')),
+                             reverse('monitoring:summary'), fetch_redirect_response=False)
+
+        self.client.post(reverse('monitoring:finish'))
+        self.assertFalse(self.orchestrator.is_running)
+        final = self.client.get(reverse('monitoring:summary'))
+        self.assertFalse(final.context['live'])
+        self.assertContains(final, 'Sesión finalizada')
+        self.assertContains(final, 'Exportar CSV')
+
+    def test_summary_before_monitoring_goes_back_to_the_session(self):
+        self.orchestrator.start()
+        self.wait_phase(self.orchestrator, PHASE_PREVIEW)
+        self.assertRedirects(self.client.get(reverse('monitoring:summary')),
+                             reverse('monitoring:session'), fetch_redirect_response=False)
+
+    def test_state_json_carries_the_live_summary(self):
+        self.run_to_monitoring(self.orchestrator)
+        data = self.client.get(reverse('monitoring:state')).json()
+        self.assertEqual(data['summary']['alert_count'], 0)
+        self.assertIn('rnf02', data['summary'])
+        self.assertEqual(data['vibration_strength'], 3)
+
+    def test_strength_command(self):
+        url = reverse('monitoring:command')
+        self.assertEqual(self.client.post(url, {'action': 'strength', 'value': '4'}).status_code, 200)
+        self.assertEqual(self.orchestrator.state().vibration_strength, 4)
+        for bad in ('0', '6', 'mucho', ''):
+            self.assertEqual(
+                self.client.post(url, {'action': 'strength', 'value': bad}).status_code, 400)
+
+    def test_session_page_has_slider_and_live_finish_links(self):
+        self.orchestrator.start()
+        page = self.client.get(reverse('monitoring:session')).content.decode()
+        self.assertEqual(page.count('data-strength-input'), 2)  # Pulsera y monitoreo.
+        self.assertIn('data-socket-path="/ws/sesion/"', page)
+        self.assertIn(f'href="{reverse("monitoring:summary")}">Finalizar sesión', page)
+
+
+class SessionConsumerTests(OrchestratorTestCase):
+    """El WebSocket empuja el estado sin que la página lo pida."""
+
+    async def test_pushes_state_and_live_summary(self):
+        from asgiref.sync import sync_to_async
+        from channels.testing import WebsocketCommunicator
+
+        from monitoring.consumers import SessionConsumer
+
+        orchestrator = self.make()
+        await sync_to_async(self.run_to_monitoring)(orchestrator)
+        remote = FakeRemoteQueue(available=True)
+        with mock.patch('monitoring.consumers.get_orchestrator', return_value=orchestrator), \
+                mock.patch('monitoring.consumers.get_registry_queue', return_value=remote):
+            communicator = WebsocketCommunicator(SessionConsumer.as_asgi(), '/ws/sesion/')
+            connected, _ = await communicator.connect()
+            self.assertTrue(connected)
+            first = await communicator.receive_json_from(timeout=2)
+            self.assertEqual(first['phase'], PHASE_MONITORING)
+            self.assertTrue(first['running'])
+            self.assertIsNotNone(first['summary'])
+            second = await communicator.receive_json_from(timeout=2)  # Llega sola.
+            self.assertIn('ear', second)
+            await communicator.disconnect()
+        await sync_to_async(orchestrator.stop)()
+
+
+# ---------- Varios rostros: cuál se mide ----------
+
+def placed(points, scale, dx, dy):
+    """Un rostro sintético agrandado y movido (el EAR no cambia al escalar).
+    Se le agregan frente y mentón (puntos 10 y 152) para que su recuadro tenga
+    el tamaño de una cara y no sólo el de los ojos."""
+    points = points.copy()
+    points[10], points[152] = (5, -8), (5, 12)
+    return points * scale + np.array([dx, dy])
+
+
+class MultiFaceDetector:
+    """Devuelve varios rostros, como FaceLandmarkDetector.detect_all."""
+
+    def __init__(self, faces_for):
+        self.faces_for = faces_for
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def detect_all(self, image, timestamp_ms):
+        return self.faces_for()
+
+
+class MultiFaceTests(OrchestratorTestCase):
+    def make_multi(self):
+        orchestrator = Orchestrator(
+            camera_factory=lambda: self.camera,
+            detector_factory=lambda: MultiFaceDetector(lambda: self.faces),
+            bracelet_factory=lambda mode: self.bracelet,
+            registry=self.registry,
+        )
+        self.addCleanup(orchestrator.stop)
+        return orchestrator
+
+    def test_measures_the_largest_face_and_counts_them(self):
+        small_open = placed(OPEN_FACE, 1, 0, 0)  # EAR 0.4
+        big_closed = placed(CLOSED_FACE, 3, 30, 0)  # EAR 0.04, tres veces más grande
+        self.faces = [small_open, big_closed]
+        orchestrator = self.make_multi()
+        orchestrator.start()
+        self.wait_phase(orchestrator, PHASE_PREVIEW)
+        self.assertTrue(wait_until(lambda: orchestrator.state().face_count == 2))
+        self.assertAlmostEqual(orchestrator.state().ear, 0.04)
+
+    def test_does_not_jump_to_a_similar_face(self):
+        orchestrator = self.make_multi()
+        a = placed(OPEN_FACE, 2, 0, 0)  # EAR 0.4
+        b = placed(CLOSED_FACE, 2.2, 40, 0)  # EAR 0.04, apenas 21 % más grande
+        self.faces = [a]
+        self.assertEqual(orchestrator._pick_main_face([a]), 0)
+        self.assertEqual(orchestrator._pick_main_face([a, b]), 0)  # Sigue con «a».
+        c = placed(CLOSED_FACE, 4, 40, 0)  # Cuatro veces el área de «a»: se cambia.
+        self.assertEqual(orchestrator._pick_main_face([a, c]), 1)
+
+    def test_without_faces_there_is_no_main_face(self):
+        orchestrator = self.make_multi()
+        self.assertIsNone(orchestrator._pick_main_face([]))
+        self.assertIsNone(orchestrator._main_center)
+
+    def test_preview_marks_the_measured_face_in_green(self):
+        import cv2
+
+        orchestrator = self.make_multi()
+        image = np.full((120, 160, 3), 40, dtype=np.uint8)
+        face = placed(OPEN_FACE, 4, 20, 40)  # Recuadro de x 20..60, y 32..48
+        other = placed(OPEN_FACE, 2, 110, 40)
+        orchestrator._publish_preview(image, [face, other], 0)
+        decoded = cv2.imdecode(np.frombuffer(orchestrator.latest_jpeg(), np.uint8), cv2.IMREAD_COLOR)
+        # En espejo, el borde izquierdo del rostro medido queda en x = 160 - 60 = 100.
+        b, g, r = decoded[40, 100].astype(int)
+        self.assertGreater(g, r + 30)
+        self.assertGreater(g, b + 30)
+        self.assertTrue((image == 40).all())  # La imagen original no se modifica.

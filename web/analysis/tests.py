@@ -385,3 +385,17 @@ class CheckAnalysisCommandTests(SimpleTestCase):
     def test_no_face_during_calibration_reports_error(self):
         with self.assertRaisesMessage(CommandError, 'Calibración incompleta'):
             self.run_command(None)
+
+
+class FaceBoxTests(SimpleTestCase):
+    def test_box_and_largest_face(self):
+        import numpy as np
+
+        from analysis.landmarks import box_area, face_box, largest_face
+
+        small = np.array([[0, 0], [10, 5]])
+        big = np.array([[50, 50], [90, 80], [60, 70]])
+        self.assertEqual(face_box(big), (50.0, 50.0, 90.0, 80.0))
+        self.assertEqual(box_area(face_box(small)), 50.0)
+        self.assertEqual(largest_face([small, big]), 1)
+        self.assertIsNone(largest_face([]))

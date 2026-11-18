@@ -1,42 +1,55 @@
 {% extends "monitoring/base.html" %}
 
 {% block title %}Resumen de la sesión · VIGÍA{% endblock %}
-{% block status %}Sesión finalizada{% endblock %}
+{% block status %}{% if live %}Monitoreo en curso{% else %}Sesión finalizada{% endif %}{% endblock %}
 
 {% block content %}
 {# ---------- 05 · Resumen de la sesión ---------- #}
-<section id="summary-view">
+<section id="summary-view"
+         {% if live %}data-live data-socket-path="/ws/sesion/" data-state-url="{% url 'monitoring:state' %}"{% endif %}>
   <div class="title-row">
-    <h1>Sesión finalizada</h1>
-    <span class="timer">{{ summary.started_at|date:"d/m/Y · H:i" }}</span>
+    <h1>{% if live %}Resumen de la sesión{% else %}Sesión finalizada{% endif %}</h1>
+    <span class="timer">{{ started_at|date:"d/m/Y · H:i" }}</span>
   </div>
 
+  {% if live %}
+    <div class="notice live" id="live-notice">
+      <span class="live-dot"></span>
+      <span>La detección y la pulsera siguen activas · nivel actual <strong id="live-level">0 · Sin indicios</strong>. Pulsa «Finalizar» para terminar la sesión.</span>
+    </div>
+  {% endif %}
+
   <div class="stats">
-    <div class="card stat dark"><div class="label">Duración</div><div class="value">{{ duration }}</div></div>
-    <div class="card stat"><div class="label">Alertas</div><div class="value">{{ summary.alert_count }}</div></div>
-    <div class="card stat"><div class="label">Nivel máximo</div><div class="value">{{ summary.max_level }} <span class="small muted">· {{ max_level_name }}</span></div></div>
+    <div class="card stat dark"><div class="label">Duración</div><div class="value" id="stat-duration">{{ summary.duration }}</div></div>
+    <div class="card stat"><div class="label">Alertas</div><div class="value" id="stat-alerts">{{ summary.alert_count }}</div></div>
+    <div class="card stat"><div class="label">Nivel máximo</div><div class="value"><span id="stat-max">{{ summary.max_level }}</span> <span class="small muted">· <span id="stat-max-name">{{ summary.max_level_name }}</span></span></div></div>
     <div class="card stat"><div class="label">Umbral EAR</div><div class="value">{% if summary.threshold %}{{ summary.threshold|floatformat:"2u" }}{% else %}–{% endif %}</div></div>
   </div>
 
+  <p class="small muted fps-line" id="fps-line">
+    FPS promedio <span id="fps-avg">{% if summary.fps_avg is not None %}{{ summary.fps_avg|floatformat:"0u" }}{% else %}–{% endif %}</span>
+    · mínimo <span id="fps-min">{% if summary.fps_min is not None %}{{ summary.fps_min|floatformat:"0u" }}{% else %}–{% endif %}</span>
+    · <span id="rnf02">{{ summary.rnf02 }}</span>
+  </p>
+
   <div class="card">
     <p class="label">Eventos de la sesión</p>
-    {% if events %}
-      <table>
-        <thead><tr><th>Hora</th><th>Nivel</th><th>Estado</th></tr></thead>
-        <tbody>
-          {% for event in events %}
-            <tr>
-              <td>{{ event.time|slice:"11:" }}</td>
-              <td><span class="pill {% if 'Medición' in event.status %}deg{% elif event.level %}l{{ event.level }}{% endif %}">{{ event.level }}</span></td>
-              <td>{{ event.status }}</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <p class="muted small">No hubo cambios de nivel durante la sesión.</p>
-    {% endif %}
-    {% if from_registry %}
+    <table id="events-table"{% if not summary.events %} hidden{% endif %}>
+      <thead><tr><th>Hora</th><th>Nivel</th><th>Estado</th></tr></thead>
+      <tbody id="events-body">
+        {% for event in summary.events %}
+          <tr>
+            <td>{{ event.time|slice:"11:" }}</td>
+            <td><span class="pill {% if 'Medición' in event.status %}deg{% elif event.level %}l{{ event.level }}{% endif %}">{{ event.level }}</span></td>
+            <td>{{ event.status }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted small" id="events-empty"{% if summary.events %} hidden{% endif %}>No hubo cambios de nivel durante la sesión.</p>
+    {% if live %}
+      <p class="small muted registry-note">Datos en vivo de esta sesión. Al finalizar se guardan en el servicio de registro (M4).</p>
+    {% elif from_registry %}
       <p class="small muted registry-note">Datos guardados en el servicio de registro (M4).</p>
     {% else %}
       <p class="small muted registry-note">El servicio de registro (M4) no respondió: se muestran los datos de esta sesión guardados en memoria.</p>
@@ -44,11 +57,19 @@
   </div>
 
   <div class="actions">
-    <a class="btn btn-secondary" href="{% url 'monitoring:prepare' %}">Nueva sesión</a>
-    <a class="btn btn-primary" id="export-csv" href="{% url 'monitoring:summary_csv' %}" download="{{ csv_name }}">Exportar CSV {% include "monitoring/icons/arrow.svg" %}</a>
+    {% if live %}
+      <a class="btn btn-secondary" href="{% url 'monitoring:session' %}">Volver al monitoreo {% include "monitoring/icons/arrow-left.svg" %}</a>
+      <form method="post" action="{% url 'monitoring:finish' %}">{% csrf_token %}
+        <button class="btn btn-primary" type="submit">Finalizar {% include "monitoring/icons/arrow.svg" %}</button>
+      </form>
+    {% else %}
+      <a class="btn btn-secondary" href="{% url 'monitoring:prepare' %}">Nueva sesión</a>
+      <a class="btn btn-primary" id="export-csv" href="{% url 'monitoring:summary_csv' %}" download="{{ csv_name }}">Exportar CSV {% include "monitoring/icons/arrow.svg" %}</a>
+    {% endif %}
   </div>
 </section>
 
+{% if not live %}
 {# ---------- 05b · CSV exportado ---------- #}
 <section id="exported-view" hidden>
   <p class="eyebrow">Resultados exportados</p>
@@ -63,9 +84,85 @@
     <a class="btn btn-primary" href="{% url 'monitoring:prepare' %}">Nueva sesión {% include "monitoring/icons/arrow.svg" %}</a>
   </div>
 </section>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
+{% if live %}
+<script>
+  // Resumen en vivo: el monitoreo sigue y los datos llegan por WebSocket.
+  // Cuando la sesión termina («Finalizar»), se recarga para mostrar el resumen de M4.
+  (function () {
+    'use strict';
+    const view = document.getElementById('summary-view');
+    const LEVELS = { 0: 'Sin indicios', 1: 'Señal inicial', 2: 'Atención reducida', 3: 'Riesgo alto' };
+    const text = (id, value) => { document.getElementById(id).textContent = value; };
+    const fps = (value) => (value === null || value === undefined ? '–' : Math.round(value));
+
+    function row(event) {
+      const tr = document.createElement('tr');
+      const level = event.level;
+      const pill = event.status.indexOf('Medición') === 0 ? 'deg' : (level ? `l${level}` : '');
+      const cells = [event.time.slice(11), null, event.status];
+      cells.forEach((value, index) => {
+        const td = document.createElement('td');
+        if (index === 1) {
+          const span = document.createElement('span');
+          span.className = `pill ${pill}`;
+          span.textContent = String(level);
+          td.appendChild(span);
+        } else {
+          td.textContent = value;
+        }
+        tr.appendChild(td);
+      });
+      return tr;
+    }
+
+    let shownEvents = -1;
+    function render(s) {
+      if (!s.running || s.phase === 'finished') { window.location.reload(); return; }
+      text('live-level', `${s.level} · ${LEVELS[s.level]}`);
+      const summary = s.summary;
+      if (!summary) return;
+      text('stat-duration', summary.duration);
+      text('stat-alerts', String(summary.alert_count));
+      text('stat-max', String(summary.max_level));
+      text('stat-max-name', summary.max_level_name);
+      text('fps-avg', fps(summary.fps_avg));
+      text('fps-min', fps(summary.fps_min));
+      text('rnf02', summary.rnf02);
+      if (summary.events.length !== shownEvents) {
+        shownEvents = summary.events.length;
+        const body = document.getElementById('events-body');
+        body.replaceChildren(...summary.events.map(row));
+        document.getElementById('events-table').hidden = shownEvents === 0;
+        document.getElementById('events-empty').hidden = shownEvents !== 0;
+      }
+    }
+
+    let pollTimer = null;
+    async function poll() {
+      try {
+        const response = await fetch(view.dataset.stateUrl, { cache: 'no-store' });
+        if (response.ok) render(await response.json());
+      } catch (error) { /* Se reintenta en la siguiente consulta. */ }
+    }
+    function connect() {
+      const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const socket = new WebSocket(`${scheme}://${window.location.host}${view.dataset.socketPath}`);
+      socket.addEventListener('open', () => { clearInterval(pollTimer); pollTimer = null; });
+      socket.addEventListener('message', (event) => render(JSON.parse(event.data)));
+      socket.addEventListener('close', () => {
+        if (pollTimer === null) pollTimer = setInterval(poll, 500);
+        setTimeout(connect, 2000);
+      });
+    }
+    poll();
+    connect();
+  }());
+</script>
+{% else %}
 <script>
   // Tras iniciar la descarga se muestra la pantalla «CSV exportado».
   document.getElementById('export-csv').addEventListener('click', function () {
@@ -81,4 +178,5 @@
     document.getElementById('top-status').textContent = 'Sesión finalizada';
   });
 </script>
+{% endif %}
 {% endblock %}

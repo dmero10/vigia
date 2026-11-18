@@ -1,8 +1,10 @@
 """M3 - Pulsera: interfaz común y pulsera simulada.
 
-La pulsera real (BLE con Bleak) irá en `ble_client.py` cuando tengamos los UUID
-y el formato de los mensajes. Debe heredar de `Bracelet`, para que el resto del
-sistema funcione igual con cualquiera de las dos.
+La pulsera real (BLE con Bleak) está en `ble_client.py`. Las dos heredan de
+`Bracelet`, para que el resto del sistema funcione igual con cualquiera.
+
+Cada mensaje lleva el nivel (0-3) y la fuerza de vibración elegida por el
+usuario (1-5), que escala la intensidad de todos los niveles.
 """
 
 import threading
@@ -11,6 +13,11 @@ from collections import deque
 from dataclasses import dataclass
 
 SIGNAL_TIMEOUT_S = 3.0  # RF-09: sin señal durante este tiempo, el motor se apaga.
+
+MIN_STRENGTH = 1
+MAX_STRENGTH = 5
+DEFAULT_STRENGTH = 3
+STRENGTHS = range(MIN_STRENGTH, MAX_STRENGTH + 1)
 
 
 class BraceletError(Exception):
@@ -30,13 +37,13 @@ class Bracelet:
         """Conecta con la pulsera o lanza `BraceletError`."""
         raise NotImplementedError
 
-    def send_level(self, level):
-        """Envía un nivel nuevo (0-3) o lanza `BraceletError`."""
+    def send_level(self, level, strength=DEFAULT_STRENGTH):
+        """Envía un nivel nuevo (0-3) con su fuerza (1-5) o lanza `BraceletError`."""
         raise NotImplementedError
 
-    def send_heartbeat(self, level):
-        """Latido de cada segundo. Por defecto reenvía el nivel actual."""
-        self.send_level(level)
+    def send_heartbeat(self, level, strength=DEFAULT_STRENGTH):
+        """Latido de cada segundo. Por defecto reenvía el nivel y la fuerza actuales."""
+        self.send_level(level, strength)
 
     def close(self):
         raise NotImplementedError
@@ -47,6 +54,7 @@ class ReceivedMessage:
     at: float  # Segundos de reloj monótono.
     kind: str  # 'level' o 'heartbeat'.
     level: int
+    strength: int = DEFAULT_STRENGTH
 
 
 class SimulatedBracelet(Bracelet):
@@ -60,6 +68,7 @@ class SimulatedBracelet(Bracelet):
         self._available = True
         self._connected = False
         self._level = 0
+        self._strength = DEFAULT_STRENGTH
         self._last_signal = None
         self._received = deque(maxlen=history)
 
@@ -74,11 +83,11 @@ class SimulatedBracelet(Bracelet):
                 raise BraceletError('La pulsera simulada no está disponible.')
             self._connected = True
 
-    def send_level(self, level):
-        self._receive('level', level)
+    def send_level(self, level, strength=DEFAULT_STRENGTH):
+        self._receive('level', level, strength)
 
-    def send_heartbeat(self, level):
-        self._receive('heartbeat', level)
+    def send_heartbeat(self, level, strength=DEFAULT_STRENGTH):
+        self._receive('heartbeat', level, strength)
 
     def close(self):
         with self._lock:
@@ -104,10 +113,17 @@ class SimulatedBracelet(Bracelet):
                 return 0
             return self._level
 
-    def _receive(self, kind, level):
+    @property
+    def strength(self):
+        """Última fuerza recibida."""
+        with self._lock:
+            return self._strength
+
+    def _receive(self, kind, level, strength):
         with self._lock:
             if not self._connected:
                 raise BraceletError('La pulsera simulada está desconectada.')
             self._level = level
+            self._strength = strength
             self._last_signal = self._clock()
-            self._received.append(ReceivedMessage(self._last_signal, kind, level))
+            self._received.append(ReceivedMessage(self._last_signal, kind, level, strength))

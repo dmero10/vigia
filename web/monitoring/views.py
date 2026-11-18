@@ -1,10 +1,13 @@
 """Capa de presentación. Las vistas sólo inician/detienen y consultan el estado:
-la cámara y el análisis corren en el hilo del orquestador, nunca aquí."""
+la cámara y el análisis corren en el hilo del orquestador, nunca aquí.
 
+Los datos en tiempo real llegan a la página por WebSocket (consumers.py); la
+vista `state` devuelve lo mismo en JSON y queda como respaldo.
+"""
+
+import asyncio
 import csv
 import logging
-import time
-from dataclasses import asdict
 from datetime import datetime
 
 from django.conf import settings
@@ -14,7 +17,17 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
+from alerts.bracelet import DEFAULT_STRENGTH, MAX_STRENGTH, MIN_STRENGTH
 from monitoring.orchestrator import COMMANDS, get_orchestrator
+from monitoring.presenters import (
+    LEVEL_NAMES,
+    STRENGTH_NAMES,
+    event_row,
+    format_duration,
+    live_payload,
+    rnf02_text,
+    summary_payload,
+)
 from monitoring.registry_client import RegistryError, get_registry_queue
 
 logger = logging.getLogger(__name__)
@@ -23,8 +36,6 @@ BRACELET_MODES = {
     'ble': 'Pulsera real',
     'simulated': 'Pulsera simulada',
 }
-LEVEL_NAMES = {0: 'Sin indicios', 1: 'Señal inicial', 2: 'Atención reducida', 3: 'Riesgo alto'}
-DEGRADED_NAMES = {'low_light': 'Poca luz', 'no_face': 'Rostro no detectado'}
 VIDEO_FRAME_INTERVAL_S = 1 / 30
 REGISTRY_FLUSH_TIMEOUT_S = 2.0
 CSV_BOM = '﻿'  # Para que Excel muestre bien las tildes.
@@ -59,24 +70,30 @@ def session(request):
     orchestrator = get_orchestrator()
     if not orchestrator.is_running and orchestrator.summary() is None:
         return redirect('monitoring:prepare')
-    return render(request, 'monitoring/session.html')
+    return render(request, 'monitoring/session.html', {
+        'strength_min': MIN_STRENGTH,
+        'strength_max': MAX_STRENGTH,
+        'strength_default': DEFAULT_STRENGTH,
+        'strength_names': STRENGTH_NAMES,
+    })
 
 
 @never_cache
 def state(request):
-    """Estado en JSON; la página de sesión lo consulta varias veces por segundo."""
-    data = get_orchestrator().state().as_dict()
-    data['running'] = get_orchestrator().is_running
-    data['registry'] = asdict(get_registry_queue().status())  # Cola de envío hacia M4.
-    return JsonResponse(data)
+    """Estado en JSON: lo mismo que envía el WebSocket (respaldo si no hay WebSocket)."""
+    return JsonResponse(live_payload(get_orchestrator(), get_registry_queue()))
 
 
 @never_cache
 def video(request):
-    """Video en vivo (MJPEG). Los fotogramas sólo pasan por memoria (RNF-05)."""
+    """Video en vivo (MJPEG). Los fotogramas sólo pasan por memoria (RNF-05).
+
+    Es un generador asíncrono: con el servidor ASGI (Daphne) no ocupa el hilo
+    que atiende al resto de las vistas.
+    """
     orchestrator = get_orchestrator()
 
-    def frames():
+    async def frames():
         last = None
         while orchestrator.is_running:
             jpeg = orchestrator.latest_jpeg()
@@ -84,18 +101,23 @@ def video(request):
                 last = jpeg
                 yield (b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: '
                        + str(len(jpeg)).encode() + b'\r\n\r\n' + jpeg + b'\r\n')
-            time.sleep(VIDEO_FRAME_INTERVAL_S)
+            await asyncio.sleep(VIDEO_FRAME_INTERVAL_S)
 
     return StreamingHttpResponse(frames(), content_type='multipart/x-mixed-replace; boundary=frame')
 
 
 @require_POST
 def command(request):
-    """Botones de la página de sesión."""
+    """Botones y deslizador de la página de sesión."""
     orchestrator = get_orchestrator()
     action = request.POST.get('action')
     if action in COMMANDS:
         orchestrator.send_command(action)
+    elif action == 'strength':
+        try:
+            orchestrator.set_strength(int(request.POST.get('value', '')))
+        except ValueError:
+            return HttpResponseBadRequest('Fuerza inválida: debe estar entre 1 y 5.')
     elif action == 'reconnect':
         orchestrator.retry_bracelet()
     elif action in ('simulate_disconnect', 'simulate_reconnect'):
@@ -112,7 +134,7 @@ def command(request):
 
 @require_POST
 def finish(request):
-    """«Finalizar sesión»: detiene el hilo (envía nivel 0 a la pulsera)."""
+    """«Finalizar»: detiene el hilo (envía nivel 0 a la pulsera y apaga la cámara)."""
     get_orchestrator().stop()
     return redirect('monitoring:summary')
 
@@ -120,37 +142,53 @@ def finish(request):
 def summary(request):
     """05 · Resumen de la sesión (RF-12) y 05b · CSV exportado.
 
-    Los datos se piden a M4 por su API. Si M4 no responde, se muestra lo que quedó
-    en memoria, para que la demostración nunca se quede sin resumen.
+    Dos momentos:
+    - En vivo: tras el primer «Finalizar sesión» el monitoreo sigue (cámara,
+      análisis y pulsera) y el resumen se actualiza por WebSocket. El botón
+      «Finalizar» lo detiene todo.
+    - Final: los datos se piden a M4 por su API. Si M4 no responde, se muestra
+      lo que quedó en memoria, para que la demostración nunca se quede sin resumen.
     """
-    local = get_orchestrator().summary()
+    orchestrator = get_orchestrator()
+    live = orchestrator.live_summary()
+    if live is not None:
+        return render(request, 'monitoring/summary.html', {
+            'live': True,
+            'summary': summary_payload(live),
+            'started_at': live.started_at,
+            'csv_name': _csv_name(live),
+        })
+    if orchestrator.is_running:
+        return redirect('monitoring:session')  # Aún no empezó el monitoreo.
+
+    local = orchestrator.summary()
     if local is None:
         return redirect('monitoring:prepare')
+    data = summary_payload(local)
+    started_at = local.started_at
     remote = _remote_summary(local)
-    if remote is None:
-        data = {
-            'started_at': local.started_at,
-            'duration_s': local.duration_s,
-            'alert_count': local.alert_count,
-            'max_level': local.max_level,
-            'threshold': local.threshold,
-        }
-        events = [_event_row(event) for event in local.events]
-    else:
+    if remote is not None:
         info, remote_events = remote
-        data = {
-            'started_at': datetime.fromisoformat(info['started_at']),
-            'duration_s': info['duration_s'],
+        started_at = datetime.fromisoformat(info['started_at'])
+        data.update({
+            'duration': format_duration(info['duration_s']),
             'alert_count': info['alert_count'],
             'max_level': info['max_level'],
+            'max_level_name': LEVEL_NAMES[info['max_level']],
             'threshold': info['threshold'],
-        }
-        events = [_remote_event_row(event) for event in remote_events]
+            'events': [_remote_event_row(event) for event in remote_events],
+        })
+        if info.get('fps_min') is not None:
+            data.update({
+                'monitoring_s': info['monitoring_s'],
+                'fps_avg': info['fps_avg'],
+                'fps_min': info['fps_min'],
+                'rnf02': rnf02_text(info['monitoring_s'] or 0, info['fps_min']),
+            })
     return render(request, 'monitoring/summary.html', {
+        'live': False,
         'summary': data,
-        'duration': _format_duration(data['duration_s']),
-        'max_level_name': LEVEL_NAMES[data['max_level']],
-        'events': events,
+        'started_at': started_at,
         'csv_name': _csv_name(local),
         'from_registry': remote is not None,
     })
@@ -158,7 +196,10 @@ def summary(request):
 
 def summary_csv(request):
     """RF-11: eventos con hora, nivel, EAR y MAR en CSV. Sólo métricas, nunca imágenes."""
-    local = get_orchestrator().summary()
+    orchestrator = get_orchestrator()
+    if orchestrator.is_running:
+        return redirect('monitoring:summary')  # Se exporta al finalizar del todo.
+    local = orchestrator.summary()
     if local is None:
         return redirect('monitoring:prepare')
     content = None
@@ -176,7 +217,7 @@ def summary_csv(request):
     writer = csv.writer(response)
     writer.writerow(['hora', 'nivel', 'estado', 'ear', 'mar'])
     for event in local.events:
-        row = _event_row(event)
+        row = event_row(event)
         writer.writerow([row['time'], row['level'], row['status'],
                          _metric(event.ear), _metric(event.mar)])
     return response
@@ -199,18 +240,6 @@ def _remote_summary(local):
         return None
 
 
-def _event_row(event):
-    if event.degraded_reason:
-        status = f'Medición no disponible ({DEGRADED_NAMES.get(event.degraded_reason, event.degraded_reason)})'
-    else:
-        status = LEVEL_NAMES[event.level]
-    return {
-        'time': timezone.localtime(event.at).strftime('%Y-%m-%d %H:%M:%S'),
-        'level': event.level,
-        'status': status,
-    }
-
-
 def _remote_event_row(event):
     at = timezone.localtime(datetime.fromisoformat(event['at']))
     return {'time': at.strftime('%Y-%m-%d %H:%M:%S'), 'level': event['level'],
@@ -223,8 +252,3 @@ def _metric(value):
 
 def _csv_name(data):
     return f'vigia_sesion_{timezone.localtime(data.started_at):%Y%m%d_%H%M}.csv'
-
-
-def _format_duration(seconds):
-    seconds = int(seconds)
-    return f'{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}'

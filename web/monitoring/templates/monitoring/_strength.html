@@ -1,0 +1,10 @@
+{# Deslizador de fuerza de vibración: escala la intensidad de todos los niveles (1-5). #}
+<div class="strength">
+  <div class="strength-head">
+    <span class="label">Fuerza de vibración</span>
+    <strong data-strength-value>{{ strength_default }} · {{ strength_names.3 }}</strong>
+  </div>
+  <input type="range" min="{{ strength_min }}" max="{{ strength_max }}" step="1" value="{{ strength_default }}"
+         data-strength-input aria-label="Fuerza de vibración">
+  <div class="strength-scale"><span>Suave</span><span>Máxima</span></div>
+</div>

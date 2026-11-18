@@ -12,4 +12,4 @@ DB_PATH = Path(os.environ.get('VIGIA_REGISTRY_DB', BASE_DIR / 'data' / 'registry
 # Zona horaria con la que se muestran las horas en el CSV.
 TIME_ZONE = ZoneInfo(os.environ.get('VIGIA_TIME_ZONE', 'America/Guayaquil'))
 
-API_VERSION = '1.0.0'
+API_VERSION = '1.1.0'  # 1.1: FPS y tiempo de monitoreo (RNF-02).

@@ -31,6 +31,10 @@ class SessionCreate(_Input):
 class SessionFinish(_Input):
     ended_at: AwareDatetime
     threshold: float | None = Field(default=None, ge=0, le=1)  # Umbral EAR calibrado.
+    # RNF-02: tiempo en monitoreo activo y FPS (opcionales: el contrato 1.0 sigue valiendo).
+    monitoring_s: float | None = Field(default=None, ge=0)
+    fps_avg: float | None = Field(default=None, ge=0)
+    fps_min: float | None = Field(default=None, ge=0)
 
 
 class EventIn(_Input):
@@ -67,6 +71,9 @@ class SessionOut(BaseModel):
     bracelet_mode: str | None
     threshold: float | None
     event_count: int
+    monitoring_s: float | None = None
+    fps_avg: float | None = None
+    fps_min: float | None = None
 
 
 class EventOut(BaseModel):
@@ -94,6 +101,10 @@ class SummaryOut(BaseModel):
     max_level_name: str
     threshold: float | None
     event_count: int
+    monitoring_s: float | None = None
+    fps_avg: float | None = None
+    fps_min: float | None = None
+    rnf02_passed: bool | None = None  # ≥5 min de monitoreo sin bajar de 25 FPS.
 
 
 class Health(BaseModel):

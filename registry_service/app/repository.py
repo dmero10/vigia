@@ -16,7 +16,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_at      TEXT,
     bracelet_mode TEXT,
     threshold     REAL,
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    monitoring_s  REAL,
+    fps_avg       REAL,
+    fps_min       REAL
 );
 CREATE TABLE IF NOT EXISTS events (
     id              TEXT PRIMARY KEY,
@@ -32,6 +35,9 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_by_session ON events (session_id, at);
 """
+
+# Columnas agregadas después de la versión 1.0: se crean en bases ya existentes.
+ADDED_SESSION_COLUMNS = {'monitoring_s': 'REAL', 'fps_avg': 'REAL', 'fps_min': 'REAL'}
 
 _DATE_FORMAT = '%Y-%m-%dT%H:%M:%S.%f+00:00'
 
@@ -64,6 +70,10 @@ class Repository:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connection() as connection:
             connection.executescript(SCHEMA)
+            existing = {row['name'] for row in connection.execute('PRAGMA table_info(sessions)')}
+            for name, kind in ADDED_SESSION_COLUMNS.items():
+                if name not in existing:
+                    connection.execute(f'ALTER TABLE sessions ADD COLUMN {name} {kind}')
 
     def ping(self):
         with self._connection() as connection:
@@ -81,12 +91,15 @@ class Repository:
             )
             return cursor.rowcount == 1
 
-    def finish_session(self, session_id, ended_at, threshold):
+    def finish_session(self, session_id, ended_at, threshold, monitoring_s=None, fps_avg=None,
+                       fps_min=None):
         """Devuelve False si la sesión no existe."""
         with self._connection() as connection:
             cursor = connection.execute(
-                'UPDATE sessions SET ended_at = ?, threshold = COALESCE(?, threshold) WHERE id = ?',
-                (to_db(ended_at), threshold, session_id),
+                'UPDATE sessions SET ended_at = ?, threshold = COALESCE(?, threshold), '
+                'monitoring_s = COALESCE(?, monitoring_s), fps_avg = COALESCE(?, fps_avg), '
+                'fps_min = COALESCE(?, fps_min) WHERE id = ?',
+                (to_db(ended_at), threshold, monitoring_s, fps_avg, fps_min, session_id),
             )
             return cursor.rowcount == 1
 
@@ -134,7 +147,7 @@ class Repository:
 
 _SESSION_QUERY = (
     'SELECT s.id, s.started_at, s.ended_at, s.bracelet_mode, s.threshold, '
-    'COUNT(e.id) AS event_count '
+    's.monitoring_s, s.fps_avg, s.fps_min, COUNT(e.id) AS event_count '
     'FROM sessions s LEFT JOIN events e ON e.session_id = s.id'
 )
 

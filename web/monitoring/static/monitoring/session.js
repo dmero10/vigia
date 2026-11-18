@@ -1,11 +1,13 @@
-// VIGÍA – página de sesión. Consulta el estado del orquestador y muestra la
-// pantalla del Figma que corresponde. No procesa imágenes: sólo muestra datos.
+// VIGÍA – página de sesión. Recibe el estado del orquestador por WebSocket y
+// muestra la pantalla del Figma que corresponde. Si el WebSocket se corta, pide
+// el estado por HTTP hasta reconectar. No procesa imágenes: sólo muestra datos.
 (function () {
   'use strict';
 
   const root = document.getElementById('session');
   const urls = root.dataset;
-  const POLL_MS = 250;
+  const POLL_MS = 250; // Sólo si no hay WebSocket.
+  const SOCKET_RETRY_MS = 2000;
   const DEGRADED_HOLD_MS = 1000; // Evita parpadeos entre «medición no disponible» y normal.
   const RECOVERED_MS = 5000; // Tiempo que se muestra «Mirada recuperada».
 
@@ -15,6 +17,7 @@
     2: { name: 'Atención reducida', pattern: 'Pulsos moderados' },
     3: { name: 'Riesgo alto', pattern: 'Pulsos intensos' },
   };
+  const STRENGTHS = { 1: 'Muy suave', 2: 'Suave', 3: 'Media', 4: 'Fuerte', 5: 'Máxima' };
   const DEGRADED = {
     low_light: 'Hay poca luz: la luz media de la imagen es menor a 40.',
     no_face: 'No se detecta tu rostro desde hace más de medio segundo.',
@@ -30,6 +33,7 @@
     degradedVisible: false,
     lastDegradedAt: 0,
     videoOn: false,
+    strengthBusyUntil: 0, // Mientras se mueve el deslizador no se pisa su valor.
   };
 
   const $ = (selector, scope = document) => scope.querySelector(selector);
@@ -117,7 +121,13 @@
   function renderSetup(s) {
     const cameraReady = s.phase !== 'starting';
     setCheck('chk-camera', cameraReady ? 'ok' : 'wait', cameraReady ? 'Cámara integrada lista.' : 'Abriendo la cámara…');
-    setCheck('chk-face', !cameraReady ? 'wait' : s.face_detected ? 'ok' : 'bad');
+    const many = s.face_count > 1;
+    setCheck('chk-face', !cameraReady ? 'wait' : s.face_detected ? 'ok' : 'bad',
+      many ? `Hay ${s.face_count} rostros: se mide el del recuadro verde.` : 'Mira de frente a la cámara.');
+    $$('[data-faces-note]').forEach((el) => {
+      el.textContent = many ? `${s.face_count} rostros · se mide el del recuadro verde`
+        : 'Vista en vivo · sin grabar';
+    });
     setCheck('chk-light', !cameraReady ? 'wait' : s.light_ok ? 'ok' : 'bad');
     document.getElementById('camera-continue').disabled = s.phase !== 'preview';
 
@@ -198,6 +208,15 @@
     if (reason) document.getElementById('degraded-reason').textContent = reason;
   }
 
+  function showStrength(value) {
+    $$('[data-strength-input]').forEach((input) => { input.value = String(value); });
+    $$('[data-strength-value]').forEach((el) => { el.textContent = `${value} · ${STRENGTHS[value]}`; });
+  }
+
+  function renderStrength(s, now) {
+    if (s.vibration_strength && now >= ui.strengthBusyUntil) showStrength(s.vibration_strength);
+  }
+
   function render(s) {
     if (s.phase === 'finished' || (s.phase === 'idle' && !s.running)) {
       window.location.href = urls.summaryUrl;
@@ -207,6 +226,7 @@
     renderVideo(s);
     renderSetup(s);
     renderMonitor(s, now);
+    renderStrength(s, now);
     document.getElementById('error-text').textContent = s.error || '';
     $$('[data-simulated-only]').forEach((el) => { el.hidden = !s.bracelet_simulated; });
     showScreen(pickScreen(s, now), s);
@@ -214,11 +234,12 @@
 
   // ---------- Botones ----------
 
-  async function sendCommand(action, button) {
+  async function sendCommand(action, button, value) {
     if (button) button.disabled = true;
     try {
       const body = new FormData();
       body.append('action', action);
+      if (value !== undefined) body.append('value', value);
       await fetch(urls.commandUrl, {
         method: 'POST',
         body,
@@ -250,7 +271,23 @@
     }
   });
 
-  // ---------- Consulta periódica ----------
+  // ---------- Deslizador de fuerza ----------
+
+  document.addEventListener('input', (event) => {
+    const input = event.target.closest('[data-strength-input]');
+    if (!input) return;
+    ui.strengthBusyUntil = Date.now() + 1500;
+    showStrength(Number(input.value));
+  });
+
+  document.addEventListener('change', (event) => {
+    const input = event.target.closest('[data-strength-input]');
+    if (!input) return;
+    ui.strengthBusyUntil = Date.now() + 1500;
+    sendCommand('strength', null, input.value); // La pulsera la recibe al momento.
+  });
+
+  // ---------- Datos en tiempo real: WebSocket, con HTTP de respaldo ----------
 
   let pending = false;
   async function poll() {
@@ -266,6 +303,27 @@
     }
   }
 
-  poll();
-  setInterval(poll, POLL_MS);
+  let pollTimer = null;
+  function startPolling() {
+    if (pollTimer === null) pollTimer = setInterval(poll, POLL_MS);
+  }
+  function stopPolling() {
+    if (pollTimer !== null) clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  function connectSocket() {
+    if (!('WebSocket' in window)) { startPolling(); return; }
+    const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const socket = new WebSocket(`${scheme}://${window.location.host}${urls.socketPath}`);
+    socket.addEventListener('open', stopPolling);
+    socket.addEventListener('message', (event) => render(JSON.parse(event.data)));
+    socket.addEventListener('close', () => {
+      startPolling(); // Mientras tanto, los datos llegan por HTTP.
+      setTimeout(connectSocket, SOCKET_RETRY_MS);
+    });
+  }
+
+  poll(); // Primer dibujo inmediato.
+  connectSocket();
 }());
