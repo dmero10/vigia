@@ -169,4 +169,4 @@ Copia de trabajo del Figma: https://www.figma.com/design/mlepvoPoUQvulXCQ78FwE8/
     LEERLO), armado por `explain.build_csv`: M4 y el respaldo de Django dan el mismo
     archivo (comprobado byte a byte). Separado por «;» porque Windows en es-419 usa «;»
     como separador de listas y Excel ponía todo en una columna con «,». Ningún texto
-    debe llevar «;» dentro.
+    debe llevar «;» dentro. Revisado por el usuario en su Excel: se ve bien.

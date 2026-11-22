@@ -140,7 +140,6 @@ es, desde `web`, `python manage.py check_bracelet --real`. Nada de esto se ha me
 
 - Guion de la demo.
 - Revisar visualmente las pantallas «Mirada recuperada» y «CSV exportado».
-- Comprobar en Excel en español que el CSV (separado por «;») se abre en columnas.
 - Opcional, mejoras de precisión: `blendshapes` de MediaPipe (`eyeBlink`, `jawOpen`) y
   comparar la abertura del párpado con el iris.
 
