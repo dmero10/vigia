@@ -266,6 +266,11 @@ class Orchestrator:
         return thread is not None and thread.is_alive()
 
     @property
+    def bracelet_mode(self):
+        """'simulated' o 'ble': la pulsera elegida para la última sesión."""
+        return self._bracelet_mode or settings.BRACELET_MODE
+
+    @property
     def bracelet(self):
         """Pulsera de la sesión actual (o None)."""
         with self._lock:

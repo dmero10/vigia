@@ -158,3 +158,15 @@ Copia de trabajo del Figma: https://www.figma.com/design/mlepvoPoUQvulXCQ78FwE8/
   - [x] Deslizador de fuerza de vibración 1–5 (pantallas pulsera y monitoreo).
   - [ ] Pulsera que se desconecta en nivel 3 con batería: firmware nuevo listo, falta
     cargarlo y probarlo con la pulsera real (ver `firmware/README.md`).
+- Registros más claros (el ingeniero no entendía los registros, 22/11/2026):
+  - `explain.py` traduce cada evento a palabras («Empieza una alerta (nivel 1)» ·
+    «Ojos cerrados 1.5 s seguidos») y agrupa las alertas (de 0 a 0). Existe dos veces,
+    IDÉNTICO: `registry_service/app/explain.py` y `web/monitoring/explain.py`
+    (una prueba de Django lo verifica: si se cambia uno, copiarlo al otro).
+  - Resumen: tabla «Alertas de la sesión» (una fila por alerta: inicio, duración, nivel
+    máximo, motivo, cómo terminó) y «Registro detallado» (hora, nivel, qué pasó, detalle).
+  - CSV en cuatro bloques (RESUMEN · ALERTAS DE LA SESIÓN · REGISTRO DETALLADO · CÓMO
+    LEERLO), armado por `explain.build_csv`: M4 y el respaldo de Django dan el mismo
+    archivo (comprobado byte a byte). Separado por «;» porque Windows en es-419 usa «;»
+    como separador de listas y Excel ponía todo en una columna con «,». Ningún texto
+    debe llevar «;» dentro.

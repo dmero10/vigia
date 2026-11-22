@@ -1,32 +1,58 @@
 """Datos listos para mostrar: lo que reciben las pantallas por WebSocket o JSON.
 
 Lo usan `views.py` (HTTP) y `consumers.py` (WebSocket), para que los dos envíen
-exactamente lo mismo.
+exactamente lo mismo. El texto de cada registro («Empieza una alerta…») sale de
+`explain.py`, el mismo que usa M4 (y que arma el CSV).
 """
 
 from dataclasses import asdict
+from datetime import datetime
 
 from django.utils import timezone
 
+from monitoring.explain import LEVEL_NAMES, STILL_ACTIVE, explain, format_seconds
 from monitoring.orchestrator import RNF02_MIN_FPS, RNF02_MIN_MONITORING_S
 
-LEVEL_NAMES = {0: 'Sin indicios', 1: 'Señal inicial', 2: 'Atención reducida', 3: 'Riesgo alto'}
-DEGRADED_NAMES = {'low_light': 'Poca luz', 'no_face': 'Rostro no detectado'}
 STRENGTH_NAMES = {1: 'Muy suave', 2: 'Suave', 3: 'Media', 4: 'Fuerte', 5: 'Máxima'}
 
 
-def event_row(event):
-    """Un evento (LevelEvent) como fila de la tabla y del CSV."""
-    if event.degraded_reason:
-        name = DEGRADED_NAMES.get(event.degraded_reason, event.degraded_reason)
-        status = f'Medición no disponible ({name})'
-    else:
-        status = LEVEL_NAMES[event.level]
-    return {
-        'time': timezone.localtime(event.at).strftime('%Y-%m-%d %H:%M:%S'),
-        'level': event.level,
-        'status': status,
-    }
+def local_event(event):
+    """Un LevelEvent del orquestador como dict para `explain`."""
+    return {'at': event.at, 'level': event.level, 'degraded_reason': event.degraded_reason,
+            'closed_ms': event.closed_ms, 'yawn_count': event.yawn_count,
+            'ear': event.ear, 'mar': event.mar}
+
+
+def remote_event(event):
+    """Un evento recibido de M4 (JSON) como dict para `explain`."""
+    return {'at': datetime.fromisoformat(event['at']), 'level': event['level'],
+            'degraded_reason': event.get('degraded_reason'),
+            'closed_ms': event.get('closed_ms') or 0, 'yawn_count': event.get('yawn_count') or 0,
+            'ear': event.get('ear'), 'mar': event.get('mar')}
+
+
+def explained(events, ended_at=None, live=False):
+    """(registro, alertas) con los textos que muestra la pantalla.
+    `live`: la sesión sigue, así que una alerta abierta está «En curso»."""
+    log, alerts = explain(events, ended_at)
+    log_rows = [{
+        'time': timezone.localtime(row['at']).strftime('%H:%M:%S'),
+        'date_time': timezone.localtime(row['at']).strftime('%Y-%m-%d %H:%M:%S'),
+        'level': row['level'],
+        'pill': 'deg' if row['degraded'] else (f"l{row['level']}" if row['level'] else ''),
+        'event': row['event'],
+        'detail': row['detail'],
+    } for row in log]
+    alert_rows = [{
+        'number': alert['number'],
+        'time': timezone.localtime(alert['start']).strftime('%H:%M:%S'),
+        'duration': '–' if alert['duration_s'] is None else format_seconds(alert['duration_s']),
+        'max_level': alert['max_level'],
+        'max_level_name': alert['max_level_name'],
+        'cause': alert['cause'],
+        'ended_by': 'En curso' if live and alert['ended_by'] == STILL_ACTIVE else alert['ended_by'],
+    } for alert in alerts]
+    return log_rows, alert_rows
 
 
 def format_duration(seconds):
@@ -46,8 +72,10 @@ def rnf02_text(monitoring_s, fps_min):
     return 'Prueba de 5 min (RNF-02): cumplida.'
 
 
-def summary_payload(summary):
+def summary_payload(summary, live=False):
     """Resumen (final o en vivo) con los textos que muestra la pantalla."""
+    log, alerts = explained([local_event(event) for event in summary.events], summary.ended_at,
+                            live=live)
     return {
         'duration': format_duration(summary.duration_s),
         'alert_count': summary.alert_count,
@@ -58,7 +86,8 @@ def summary_payload(summary):
         'fps_avg': summary.fps_avg,
         'fps_min': summary.fps_min,
         'rnf02': rnf02_text(summary.monitoring_s, summary.fps_min),
-        'events': [event_row(event) for event in summary.events],
+        'log': log,
+        'alerts': alerts,
     }
 
 
@@ -68,5 +97,5 @@ def live_payload(orchestrator, registry_queue):
     data['running'] = orchestrator.is_running
     data['registry'] = asdict(registry_queue.status())  # Cola de envío hacia M4.
     live = orchestrator.live_summary()
-    data['summary'] = None if live is None else summary_payload(live)
+    data['summary'] = None if live is None else summary_payload(live, live=True)
     return data

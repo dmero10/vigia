@@ -81,6 +81,8 @@ class EventOut(BaseModel):
     at: AwareDatetime
     level: int
     status: str  # Texto para mostrar, p. ej. «Señal inicial».
+    event: str = ''  # Qué pasó, en palabras: «Empieza una alerta (nivel 1)».
+    detail: str = ''  # Por qué: «Ojos cerrados 1.5 s seguidos».
     degraded_reason: str | None
     ear: float | None
     mar: float | None

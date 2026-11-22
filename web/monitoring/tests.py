@@ -401,8 +401,14 @@ class ViewTests(OrchestratorTestCase):
         self.assertEqual(csv_response['Content-Type'], 'text/csv; charset=utf-8')
         self.assertIn('attachment; filename="vigia_sesion_', csv_response['Content-Disposition'])
         text = csv_response.content.decode('utf-8')
-        self.assertTrue(text.startswith('﻿hora,nivel,estado,ear,mar'))
-        self.assertIn(',1,Señal inicial', text)
+        # El mismo archivo que genera M4: bloques separados por «;» para Excel en español.
+        self.assertTrue(text.startswith('\ufeffVIGÍA · Registro de la sesión de monitoreo'))
+        self.assertIn('\r\nRESUMEN\r\n', text)
+        self.assertIn('Pulsera;Simulada', text)
+        self.assertIn('Número de alertas;1', text)
+        self.assertIn('ALERTAS DE LA SESIÓN', text)
+        self.assertIn(';1;Señal inicial;1;Empieza una alerta (nivel 1);Ojos cerrados', text)
+        self.assertIn('CÓMO LEERLO', text)
 
     def test_summary_without_session_goes_to_prepare(self):
         self.assertRedirects(self.client.get(reverse('monitoring:summary')),
@@ -726,3 +732,37 @@ class MultiFaceTests(OrchestratorTestCase):
         self.assertGreater(g, r + 30)
         self.assertGreater(g, b + 30)
         self.assertTrue((image == 40).all())  # La imagen original no se modifica.
+
+
+# ---------- Registros que se entienden ----------
+
+class ExplainedRecordsTests(ViewTests):
+    def test_summary_has_alerts_table_and_explained_log(self):
+        self.finish_session()  # Ojos cerrados hasta nivel >= 1 y «Finalizar».
+        response = self.client.get(reverse('monitoring:summary'))
+        self.assertContains(response, 'Alertas de la sesión')
+        self.assertContains(response, 'Una alerta empieza cuando el nivel sube de 0')
+        self.assertContains(response, 'Registro detallado')
+        self.assertContains(response, 'Empieza una alerta (nivel 1)')
+        self.assertContains(response, 'Ojos cerrados 1.')
+        alerts = response.context['summary']['alerts']
+        self.assertEqual(len(alerts), response.context['summary']['alert_count'])
+        self.assertEqual(alerts[0]['cause'], 'Ojos cerrados')
+
+    def test_live_alert_is_in_progress(self):
+        self.run_to_monitoring(self.orchestrator)
+        self.face = CLOSED_FACE
+        self.assertTrue(wait_until(lambda: self.orchestrator.state().level >= 1, timeout=10))
+        data = self.client.get(reverse('monitoring:state')).json()['summary']
+        self.assertEqual(data['alerts'][0]['ended_by'], 'En curso')
+        self.assertEqual(data['log'][0]['event'], 'Empieza una alerta (nivel 1)')
+
+
+class ExplainCopiesTests(SimpleTestCase):
+    def test_django_and_m4_copies_are_identical(self):
+        """explain.py existe en M4 y en Django: si se cambia uno, hay que copiarlo al otro."""
+        from pathlib import Path
+
+        web = Path(__file__).resolve().parent / 'explain.py'
+        m4 = Path(__file__).resolve().parents[2] / 'registry_service' / 'app' / 'explain.py'
+        self.assertEqual(web.read_bytes(), m4.read_bytes())

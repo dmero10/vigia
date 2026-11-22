@@ -98,6 +98,10 @@ Usan cámara, rostro y pulsera simulados: no necesitan webcam ni hardware.
   cumplieron 5 min de monitoreo sin bajar de 25 FPS (también queda en M4).
 - **Fuerza de vibración:** deslizador 1–5 que escala todos los niveles. El mensaje BLE pasa
   a dos dígitos (nivel y fuerza).
+- **Registros que se entienden:** el resumen tiene una tabla de alertas (una fila por
+  alerta) y un registro detallado que dice qué pasó y por qué. El CSV trae el resumen, las
+  alertas, el registro y una guía «Cómo leerlo»; usa «;» para que Excel en español lo
+  abra en columnas.
 - **Varios rostros:** se detectan hasta 3 y se mide el más grande (el más cercano). En el
   video, el rostro medido lleva un recuadro verde y los demás uno gris, y la interfaz avisa
   cuántos hay. Falta comprobar con la webcam real que los FPS no bajan.
@@ -136,7 +140,7 @@ es, desde `web`, `python manage.py check_bracelet --real`. Nada de esto se ha me
 
 - Guion de la demo.
 - Revisar visualmente las pantallas «Mirada recuperada» y «CSV exportado».
-- Comprobar cómo abre el CSV en Excel en español: usa comas y podría verse en una columna.
+- Comprobar en Excel en español que el CSV (separado por «;») se abre en columnas.
 - Opcional, mejoras de precisión: `blendshapes` de MediaPipe (`eyeBlink`, `jawOpen`) y
   comparar la abertura del párpado con el iris.
 

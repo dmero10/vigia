@@ -282,3 +282,8 @@ td { padding: 10px 12px; border-bottom: 1px solid var(--line); font-variant-nume
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .fps-line { margin: -6px 0 16px; }
 .actions form { display: contents; }
+
+/* Resumen: tablas de alertas y registro detallado. */
+.summary-card { margin-bottom: 16px; }
+.card-intro { margin: 4px 0 12px; }
+td.muted { color: var(--muted); }

@@ -6,7 +6,6 @@ vista `state` devuelve lo mismo en JSON y queda como respaldo.
 """
 
 import asyncio
-import csv
 import logging
 from datetime import datetime
 
@@ -19,12 +18,14 @@ from django.views.decorators.http import require_POST
 
 from alerts.bracelet import DEFAULT_STRENGTH, MAX_STRENGTH, MIN_STRENGTH
 from monitoring.orchestrator import COMMANDS, get_orchestrator
+from monitoring.explain import LEVEL_NAMES, build_csv
 from monitoring.presenters import (
-    LEVEL_NAMES,
     STRENGTH_NAMES,
-    event_row,
+    explained,
     format_duration,
     live_payload,
+    local_event,
+    remote_event,
     rnf02_text,
     summary_payload,
 )
@@ -38,7 +39,6 @@ BRACELET_MODES = {
 }
 VIDEO_FRAME_INTERVAL_S = 1 / 30
 REGISTRY_FLUSH_TIMEOUT_S = 2.0
-CSV_BOM = '﻿'  # Para que Excel muestre bien las tildes.
 
 
 def welcome(request):
@@ -154,7 +154,7 @@ def summary(request):
     if live is not None:
         return render(request, 'monitoring/summary.html', {
             'live': True,
-            'summary': summary_payload(live),
+            'summary': summary_payload(live, live=True),
             'started_at': live.started_at,
             'csv_name': _csv_name(live),
         })
@@ -170,13 +170,16 @@ def summary(request):
     if remote is not None:
         info, remote_events = remote
         started_at = datetime.fromisoformat(info['started_at'])
+        ended_at = datetime.fromisoformat(info['ended_at']) if info.get('ended_at') else None
+        log, alerts = explained([remote_event(event) for event in remote_events], ended_at)
         data.update({
             'duration': format_duration(info['duration_s']),
             'alert_count': info['alert_count'],
             'max_level': info['max_level'],
             'max_level_name': LEVEL_NAMES[info['max_level']],
             'threshold': info['threshold'],
-            'events': [_remote_event_row(event) for event in remote_events],
+            'log': log,
+            'alerts': alerts,
         })
         if info.get('fps_min') is not None:
             data.update({
@@ -195,7 +198,8 @@ def summary(request):
 
 
 def summary_csv(request):
-    """RF-11: eventos con hora, nivel, EAR y MAR en CSV. Sólo métricas, nunca imágenes."""
+    """RF-11: CSV con resumen, alertas y eventos (hora, nivel, EAR, MAR). Sólo
+    métricas, nunca imágenes."""
     orchestrator = get_orchestrator()
     if orchestrator.is_running:
         return redirect('monitoring:summary')  # Se exporta al finalizar del todo.
@@ -213,13 +217,21 @@ def summary_csv(request):
     if content is not None:
         response.write(content)  # Generado por M4.
         return response
-    response.write(CSV_BOM)
-    writer = csv.writer(response)
-    writer.writerow(['hora', 'nivel', 'estado', 'ear', 'mar'])
-    for event in local.events:
-        row = event_row(event)
-        writer.writerow([row['time'], row['level'], row['status'],
-                         _metric(event.ear), _metric(event.mar)])
+    # Sin M4: el mismo archivo que genera M4 (explain.build_csv).
+    events = [{**local_event(event), 'at': timezone.localtime(event.at)}
+              for event in local.events]
+    response.write(build_csv({
+        'started_at': timezone.localtime(local.started_at),
+        'ended_at': timezone.localtime(local.ended_at),
+        'duration_s': local.duration_s,
+        'alert_count': local.alert_count,
+        'max_level': local.max_level,
+        'threshold': local.threshold,
+        'monitoring_s': local.monitoring_s,
+        'fps_avg': local.fps_avg,
+        'fps_min': local.fps_min,
+        'bracelet_mode': get_orchestrator().bracelet_mode,
+    }, events))
     return response
 
 
@@ -238,16 +250,6 @@ def _remote_summary(local):
     except RegistryError as error:
         logger.warning('No se pudo leer el resumen de M4: %s', error)
         return None
-
-
-def _remote_event_row(event):
-    at = timezone.localtime(datetime.fromisoformat(event['at']))
-    return {'time': at.strftime('%Y-%m-%d %H:%M:%S'), 'level': event['level'],
-            'status': event['status']}
-
-
-def _metric(value):
-    return '' if value is None else f'{value:.3f}'
 
 
 def _csv_name(data):

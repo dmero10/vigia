@@ -32,21 +32,44 @@
     · <span id="rnf02">{{ summary.rnf02 }}</span>
   </p>
 
-  <div class="card">
-    <p class="label">Eventos de la sesión</p>
-    <table id="events-table"{% if not summary.events %} hidden{% endif %}>
-      <thead><tr><th>Hora</th><th>Nivel</th><th>Estado</th></tr></thead>
-      <tbody id="events-body">
-        {% for event in summary.events %}
+  <div class="card summary-card">
+    <p class="label">Alertas de la sesión</p>
+    <p class="small muted card-intro">Una alerta empieza cuando el nivel sube de 0 y termina cuando vuelve a 0. Cada fila es una alerta.</p>
+    <table id="alerts-table"{% if not summary.alerts %} hidden{% endif %}>
+      <thead><tr><th>N.º</th><th>Inicio</th><th>Duración</th><th>Nivel máximo</th><th>Motivo</th><th>Cómo terminó</th></tr></thead>
+      <tbody id="alerts-body">
+        {% for alert in summary.alerts %}
           <tr>
-            <td>{{ event.time|slice:"11:" }}</td>
-            <td><span class="pill {% if 'Medición' in event.status %}deg{% elif event.level %}l{{ event.level }}{% endif %}">{{ event.level }}</span></td>
-            <td>{{ event.status }}</td>
+            <td>{{ alert.number }}</td>
+            <td>{{ alert.time }}</td>
+            <td>{{ alert.duration }}</td>
+            <td><span class="pill l{{ alert.max_level }}">{{ alert.max_level }}</span> {{ alert.max_level_name }}</td>
+            <td>{{ alert.cause }}</td>
+            <td>{{ alert.ended_by }}</td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
-    <p class="muted small" id="events-empty"{% if summary.events %} hidden{% endif %}>No hubo cambios de nivel durante la sesión.</p>
+    <p class="muted small" id="alerts-empty"{% if summary.alerts %} hidden{% endif %}>No hubo alertas: el nivel se mantuvo en 0.</p>
+  </div>
+
+  <div class="card">
+    <p class="label">Registro detallado</p>
+    <p class="small muted card-intro">Cada cambio que guardó el sistema, con la hora y el motivo. Es lo mismo que contiene el CSV.</p>
+    <table id="events-table"{% if not summary.log %} hidden{% endif %}>
+      <thead><tr><th>Hora</th><th>Nivel</th><th>Qué pasó</th><th>Detalle</th></tr></thead>
+      <tbody id="events-body">
+        {% for row in summary.log %}
+          <tr>
+            <td>{{ row.time }}</td>
+            <td><span class="pill {{ row.pill }}">{{ row.level }}</span></td>
+            <td>{{ row.event }}</td>
+            <td class="muted">{{ row.detail }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted small" id="events-empty"{% if summary.log %} hidden{% endif %}>No hubo cambios de nivel durante la sesión.</p>
     {% if live %}
       <p class="small muted registry-note">Datos en vivo de esta sesión. Al finalizar se guardan en el servicio de registro (M4).</p>
     {% elif from_registry %}
@@ -77,7 +100,7 @@
     <div class="check-badge">{% include "monitoring/icons/check.svg" %}</div>
     <h1>CSV exportado correctamente</h1>
     <span class="file-chip">{{ csv_name }}</span>
-    <p class="small muted">Contiene la hora, el nivel, el estado y las métricas EAR/MAR de cada evento. No incluye imágenes de tu rostro.</p>
+    <p class="small muted">Cada fila dice la hora, el nivel, qué pasó y por qué, con las métricas EAR/MAR. Se abre en Excel con una columna por dato. No incluye imágenes de tu rostro.</p>
   </div>
   <div class="actions">
     <button class="btn btn-secondary" type="button" id="back-to-summary">Volver al resumen {% include "monitoring/icons/arrow-left.svg" %}</button>
@@ -99,27 +122,40 @@
     const text = (id, value) => { document.getElementById(id).textContent = value; };
     const fps = (value) => (value === null || value === undefined ? '–' : Math.round(value));
 
-    function row(event) {
+    function cell(text, className) {
+      const td = document.createElement('td');
+      if (className) td.className = className;
+      td.textContent = text;
+      return td;
+    }
+    function pill(level, kind) {
+      const td = document.createElement('td');
+      const span = document.createElement('span');
+      span.className = `pill ${kind}`;
+      span.textContent = String(level);
+      td.appendChild(span);
+      return td;
+    }
+    function logRow(row) {
       const tr = document.createElement('tr');
-      const level = event.level;
-      const pill = event.status.indexOf('Medición') === 0 ? 'deg' : (level ? `l${level}` : '');
-      const cells = [event.time.slice(11), null, event.status];
-      cells.forEach((value, index) => {
-        const td = document.createElement('td');
-        if (index === 1) {
-          const span = document.createElement('span');
-          span.className = `pill ${pill}`;
-          span.textContent = String(level);
-          td.appendChild(span);
-        } else {
-          td.textContent = value;
-        }
-        tr.appendChild(td);
-      });
+      tr.append(cell(row.time), pill(row.level, row.pill), cell(row.event), cell(row.detail, 'muted'));
       return tr;
     }
+    function alertRow(alert) {
+      const tr = document.createElement('tr');
+      const level = pill(alert.max_level, `l${alert.max_level}`);
+      level.append(` ${alert.max_level_name}`);
+      tr.append(cell(String(alert.number)), cell(alert.time), cell(alert.duration), level,
+        cell(alert.cause), cell(alert.ended_by));
+      return tr;
+    }
+    function fill(name, rows, build) {
+      document.getElementById(`${name}-body`).replaceChildren(...rows.map(build));
+      document.getElementById(`${name}-table`).hidden = rows.length === 0;
+      document.getElementById(`${name}-empty`).hidden = rows.length !== 0;
+    }
 
-    let shownEvents = -1;
+    let shown = '';
     function render(s) {
       if (!s.running || s.phase === 'finished') { window.location.reload(); return; }
       text('live-level', `${s.level} · ${LEVELS[s.level]}`);
@@ -132,12 +168,11 @@
       text('fps-avg', fps(summary.fps_avg));
       text('fps-min', fps(summary.fps_min));
       text('rnf02', summary.rnf02);
-      if (summary.events.length !== shownEvents) {
-        shownEvents = summary.events.length;
-        const body = document.getElementById('events-body');
-        body.replaceChildren(...summary.events.map(row));
-        document.getElementById('events-table').hidden = shownEvents === 0;
-        document.getElementById('events-empty').hidden = shownEvents !== 0;
+      const key = JSON.stringify([summary.log, summary.alerts]);
+      if (key !== shown) { // Sólo se redibujan las tablas si cambiaron.
+        shown = key;
+        fill('events', summary.log, logRow);
+        fill('alerts', summary.alerts, alertRow);
       }
     }
 

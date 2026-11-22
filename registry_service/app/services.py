@@ -3,17 +3,13 @@
 No sabe nada de HTTP ni de SQL: recibe datos validados y usa el repositorio.
 """
 
-import csv
-import io
 from datetime import datetime, timezone
 
+from app.explain import RNF02_MIN_FPS, RNF02_MIN_MONITORING_S, build_csv, explain
 from app.schemas import BatchResult, EventOut, SessionOut, SummaryOut
 
 LEVEL_NAMES = {0: 'Sin indicios', 1: 'Señal inicial', 2: 'Atención reducida', 3: 'Riesgo alto'}
 DEGRADED_NAMES = {'low_light': 'Poca luz', 'no_face': 'Rostro no detectado'}
-CSV_HEADER = ['hora', 'nivel', 'estado', 'ear', 'mar']
-RNF02_MIN_MONITORING_S = 300.0  # RNF-02: sesiones de al menos 5 minutos...
-RNF02_MIN_FPS = 25.0  # ...sin bajar de 25 FPS.
 
 
 class SessionNotFound(Exception):
@@ -89,10 +85,13 @@ class RegistryService:
         return [_session_out(row) for row in self.repository.list_sessions(limit)]
 
     def list_events(self, session_id):
-        self._require(session_id)
+        session = self._require(session_id)
+        rows = self.repository.list_events(session_id)
+        log, _ = explain(rows, session['ended_at'])
         return [
-            EventOut(**row, status=event_status(row['level'], row['degraded_reason']))
-            for row in self.repository.list_events(session_id)
+            EventOut(**row, status=event_status(row['level'], row['degraded_reason']),
+                     event=text['event'], detail=text['detail'])
+            for row, text in zip(rows, log)
         ]
 
     def summary(self, session_id):
@@ -100,20 +99,20 @@ class RegistryService:
         return compute_summary(session, self.repository.list_events(session_id))
 
     def export_csv(self, session_id):
-        """CSV con todos los eventos (HU-05). Sólo métricas, nunca imágenes."""
-        buffer = io.StringIO()
-        buffer.write('﻿')  # Para que Excel muestre bien las tildes.
-        writer = csv.writer(buffer, lineterminator='\r\n')
-        writer.writerow(CSV_HEADER)
-        for event in self.list_events(session_id):
-            writer.writerow([
-                event.at.astimezone(self.time_zone).strftime('%Y-%m-%d %H:%M:%S'),
-                event.level,
-                event.status,
-                _metric(event.ear),
-                _metric(event.mar),
-            ])
-        return buffer.getvalue()
+        """CSV de la sesión (RF-11): resumen, alertas, registro detallado y cómo
+        leerlo. Sólo métricas, nunca imágenes."""
+        session = self._require(session_id)
+        events = self.repository.list_events(session_id)
+        summary = compute_summary(session, events)
+        local = self._local
+        return build_csv(
+            {**summary.model_dump(), 'started_at': local(summary.started_at),
+             'ended_at': local(summary.ended_at), 'bracelet_mode': session['bracelet_mode']},
+            [{**event, 'at': local(event['at'])} for event in events],
+        )
+
+    def _local(self, moment):
+        return None if moment is None else moment.astimezone(self.time_zone)
 
     def csv_filename(self, session_id):
         started = self._require(session_id)['started_at'].astimezone(self.time_zone)
@@ -129,6 +128,3 @@ class RegistryService:
 def _session_out(row):
     return SessionOut(**row, status='finished' if row['ended_at'] else 'open')
 
-
-def _metric(value):
-    return '' if value is None else f'{value:.3f}'
