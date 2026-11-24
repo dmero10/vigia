@@ -50,6 +50,17 @@ COMMAND_CALIBRATE = 'calibrate'
 COMMAND_RECALIBRATE = 'recalibrate'
 COMMAND_MONITOR = 'monitor'
 COMMANDS = (COMMAND_CALIBRATE, COMMAND_RECALIBRATE, COMMAND_MONITOR)
+# Fase en la que cada botón tiene sentido; en otra fase se rechaza.
+COMMAND_PHASES = {
+    COMMAND_CALIBRATE: PHASE_PREVIEW,
+    COMMAND_RECALIBRATE: PHASE_CALIBRATED,
+    COMMAND_MONITOR: PHASE_CALIBRATED,
+}
+# Para calibrar, el rostro y la luz deben haber estado bien hace poco: en el paso de
+# la pulsera ya no se ve la cámara y un instante sin rostro no debe impedir avanzar.
+CAMERA_OK_WINDOW_S = 3.0
+STEP_CAMERA = 'camera'
+STEP_BRACELET = 'bracelet'
 
 PREVIEW_EVERY_N_FRAMES = 2  # La vista previa va a ~15 FPS para no restar FPS al análisis.
 PREVIEW_JPEG_QUALITY = 70
@@ -65,6 +76,15 @@ STOP_TIMEOUT_S = 10.0
 RNF02_MIN_MONITORING_S = 300.0
 RNF02_MIN_FPS = 25.0
 FPS_WARMUP_S = 3.0  # Los primeros segundos no cuentan para el mínimo (la ventana se llena).
+
+
+class CommandRejected(Exception):
+    """El botón todavía no puede usarse. `step` es el paso del recorrido que hay que
+    corregir ('camera' o 'bracelet'), o None si sólo llegó en el momento equivocado."""
+
+    def __init__(self, message, step=None):
+        super().__init__(message)
+        self.step = step
 
 
 @dataclass(frozen=True)
@@ -198,6 +218,7 @@ class Orchestrator:
         self._fps = FpsMeter()
         self._strength = DEFAULT_STRENGTH
         self._main_center = None  # Centro del rostro medido en el fotograma anterior.
+        self._camera_ok_at = None  # Reloj monótono: última vez con rostro y buena luz.
 
     # ---------- Lo que usan las vistas ----------
 
@@ -218,6 +239,7 @@ class Orchestrator:
             self._preview = None
             self._fps = FpsMeter()
             self._main_center = None
+            self._camera_ok_at = None
             self._state = MonitoringState(phase=PHASE_STARTING, vibration_strength=self._strength)
             session = self._session
             self._thread = threading.Thread(target=self._run, name='monitoring', daemon=True)
@@ -235,11 +257,35 @@ class Orchestrator:
             thread.join(STOP_TIMEOUT_S)
 
     def send_command(self, command):
-        """Botones del recorrido: 'calibrate', 'recalibrate' o 'monitor'."""
+        """Botones del recorrido: 'calibrate', 'recalibrate' o 'monitor'.
+
+        Lanza CommandRejected si todavía no se cumplen las condiciones del paso
+        (la pantalla ya bloquea el botón; esto evita saltárselo recargando la página).
+        """
         if command not in COMMANDS:
             raise ValueError(f'Comando desconocido: {command}')
+        state = self.state()
+        if state.phase != COMMAND_PHASES[command]:
+            raise CommandRejected('Ese paso no está disponible en este momento.')
+        if command == COMMAND_CALIBRATE:
+            self._check_ready_to_calibrate(state)
         with self._lock:
             self._command = command
+
+    def _check_ready_to_calibrate(self, state):
+        """Antes de calibrar: los 3 puntos de la cámara y la pulsera conectada."""
+        ok_at = self._camera_ok_at
+        camera_ok = ok_at is not None and time.monotonic() - ok_at <= CAMERA_OK_WINDOW_S
+        if not camera_ok:
+            if not state.light_ok:
+                raise CommandRejected(
+                    'Hay poca luz. Mejora la iluminación antes de continuar.', STEP_CAMERA)
+            raise CommandRejected(
+                'No se detecta tu rostro. Mira de frente a la cámara antes de continuar.',
+                STEP_CAMERA)
+        if state.bracelet is None or not state.bracelet.connected:
+            raise CommandRejected(
+                'La pulsera todavía no está conectada. Espera a que se enlace.', STEP_BRACELET)
 
     def set_strength(self, strength):
         """Deslizador de fuerza (1-5): escala la vibración de todos los niveles.
@@ -458,6 +504,8 @@ class Orchestrator:
         return main
 
     def _show(self, measurement, **changes):
+        if measurement.ear is not None and measurement.light_ok:
+            self._camera_ok_at = time.monotonic()
         self._set_state(
             ear=measurement.ear,
             mar=measurement.mar,

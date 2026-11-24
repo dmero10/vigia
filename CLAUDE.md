@@ -158,6 +158,15 @@ Copia de trabajo del Figma: https://www.figma.com/design/mlepvoPoUQvulXCQ78FwE8/
   - [x] Deslizador de fuerza de vibración 1–5 (pantallas pulsera y monitoreo).
   - [ ] Pulsera que se desconecta en nivel 3 con batería: firmware nuevo listo, falta
     cargarlo y probarlo con la pulsera real (ver `firmware/README.md`).
+- Validación de pasos (23/11/2026): «Continuar» de la cámara sólo con los 3 puntos en
+  verde (cámara, rostro, luz); «Continuar» de la pulsera sólo con la pulsera conectada.
+  El servidor lo vuelve a comprobar (`Orchestrator.send_command` → `CommandRejected`,
+  la vista responde 409 con el motivo y el paso a corregir): rostro y luz bien en los
+  últimos 3 s, pulsera conectada, y cada botón sólo en su fase. Al recargar en
+  `#pulsera` sin rostro o sin luz, vuelve a la cámara.
+- CSS y JS se cargan con `{% versioned_static %}` (`monitoring/templatetags/vigia_static.py`,
+  agrega `?v=<fecha del archivo>`): sin eso el navegador usaba el `session.js` viejo.
+  Al crear la etiqueta hay que reiniciar `runserver`.
 - Registros más claros (el ingeniero no entendía los registros, 22/11/2026):
   - `explain.py` traduce cada evento a palabras («Empieza una alerta (nivel 1)» ·
     «Ojos cerrados 1.5 s seguidos») y agrupa las alertas (de 0 a 0). Existe dos veces,

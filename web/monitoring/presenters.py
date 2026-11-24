@@ -60,13 +60,17 @@ def format_duration(seconds):
     return f'{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}'
 
 
-def rnf02_text(monitoring_s, fps_min):
-    """Texto de la prueba de 5 minutos (RNF-02) para el resumen."""
+def rnf02_text(monitoring_s, fps_min, live=False):
+    """Texto de la prueba de 5 minutos (RNF-02) para el resumen.
+    `live`: la sesión sigue, así que aún pueden completarse los 5 minutos."""
     if fps_min is None:
         return 'Prueba de 5 min (RNF-02): sin datos de FPS.'
     if fps_min < RNF02_MIN_FPS:
         return f'Prueba de 5 min (RNF-02): no cumplida, el FPS bajó a {fps_min:.0f}.'
     if monitoring_s < RNF02_MIN_MONITORING_S:
+        if not live:
+            return (f'Prueba de 5 min (RNF-02): no cumplida, la sesión tuvo '
+                    f'{monitoring_s / 60:.1f} min de monitoreo.')
         missing = (RNF02_MIN_MONITORING_S - monitoring_s) / 60
         return f'Prueba de 5 min (RNF-02): en curso, faltan {missing:.1f} min de monitoreo.'
     return 'Prueba de 5 min (RNF-02): cumplida.'
@@ -85,7 +89,7 @@ def summary_payload(summary, live=False):
         'monitoring_s': summary.monitoring_s,
         'fps_avg': summary.fps_avg,
         'fps_min': summary.fps_min,
-        'rnf02': rnf02_text(summary.monitoring_s, summary.fps_min),
+        'rnf02': rnf02_text(summary.monitoring_s, summary.fps_min, live=live),
         'log': log,
         'alerts': alerts,
     }

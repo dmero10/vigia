@@ -20,6 +20,7 @@ from monitoring.orchestrator import (
     PHASE_FINISHED,
     PHASE_MONITORING,
     PHASE_PREVIEW,
+    CommandRejected,
     Orchestrator,
 )
 from monitoring.registry_client import RegistryStatus, RegistryUnavailable
@@ -119,9 +120,18 @@ class OrchestratorTestCase(SimpleTestCase):
             f'No llegó a {phase}; estado: {orchestrator.state()}',
         )
 
+    def wait_ready(self, orchestrator):
+        """Cámara con rostro y luz, y pulsera conectada: ya se puede calibrar."""
+        self.wait_phase(orchestrator, PHASE_PREVIEW)
+        self.assertTrue(wait_until(lambda: orchestrator.state().face_detected
+                                   and orchestrator.state().light_ok
+                                   and orchestrator.state().bracelet is not None
+                                   and orchestrator.state().bracelet.connected),
+                        f'No quedó lista para calibrar; estado: {orchestrator.state()}')
+
     def run_to_monitoring(self, orchestrator):
         orchestrator.start()
-        self.wait_phase(orchestrator, PHASE_PREVIEW)
+        self.wait_ready(orchestrator)
         orchestrator.send_command('calibrate')
         self.wait_phase(orchestrator, PHASE_CALIBRATED)
         orchestrator.send_command('monitor')
@@ -168,7 +178,7 @@ class OrchestratorFlowTests(OrchestratorTestCase):
     def test_waits_after_calibration_and_can_recalibrate(self):
         orchestrator = self.make()
         orchestrator.start()
-        self.wait_phase(orchestrator, PHASE_PREVIEW)
+        self.wait_ready(orchestrator)
         orchestrator.send_command('calibrate')
         self.wait_phase(orchestrator, PHASE_CALIBRATED)
         time.sleep(0.1)
@@ -250,7 +260,7 @@ class OrchestratorControlTests(OrchestratorTestCase):
     def test_stop_during_calibration(self):
         orchestrator = self.make()
         orchestrator.start()
-        self.wait_phase(orchestrator, PHASE_PREVIEW)
+        self.wait_ready(orchestrator)
         orchestrator.send_command('calibrate')
         self.wait_phase(orchestrator, PHASE_CALIBRATING)
         orchestrator.stop()
@@ -265,6 +275,64 @@ class OrchestratorControlTests(OrchestratorTestCase):
             self.make().send_command('borrar')
 
 
+class StepValidationTests(OrchestratorTestCase):
+    """No se puede avanzar sin cumplir el paso, aunque se recargue la página."""
+
+    def assertRejected(self, orchestrator, command, step, text):
+        with self.assertRaises(CommandRejected) as caught:
+            orchestrator.send_command(command)
+        self.assertEqual(caught.exception.step, step)
+        self.assertIn(text, str(caught.exception))
+        time.sleep(0.05)
+        self.assertEqual(orchestrator.state().phase, PHASE_PREVIEW)  # No avanzó.
+
+    def test_calibrate_needs_a_face(self):
+        self.face = None
+        orchestrator = self.make()
+        orchestrator.start()
+        self.wait_phase(orchestrator, PHASE_PREVIEW)
+        self.assertRejected(orchestrator, 'calibrate', 'camera', 'No se detecta tu rostro')
+
+    def test_calibrate_needs_light(self):
+        self.camera.brightness = 10
+        orchestrator = self.make()
+        orchestrator.start()
+        self.wait_phase(orchestrator, PHASE_PREVIEW)
+        self.assertRejected(orchestrator, 'calibrate', 'camera', 'poca luz')
+
+    def test_calibrate_needs_the_bracelet(self):
+        self.bracelet.set_available(False)
+        orchestrator = self.make()
+        orchestrator.start()
+        self.wait_phase(orchestrator, PHASE_PREVIEW)
+        self.assertTrue(wait_until(lambda: orchestrator.state().face_detected))
+        self.assertRejected(orchestrator, 'calibrate', 'bracelet', 'pulsera')
+
+        self.bracelet.set_available(True)
+        orchestrator.retry_bracelet()
+        self.wait_ready(orchestrator)
+        orchestrator.send_command('calibrate')
+        self.wait_phase(orchestrator, PHASE_CALIBRATED)
+
+    def test_a_face_seen_a_moment_ago_is_enough(self):
+        # En el paso de la pulsera no se ve la cámara: mirar la pulsera un instante
+        # no debe impedir continuar.
+        orchestrator = self.make()
+        orchestrator.start()
+        self.wait_ready(orchestrator)
+        self.face = None
+        self.assertTrue(wait_until(lambda: not orchestrator.state().face_detected))
+        orchestrator.send_command('calibrate')
+        self.assertTrue(wait_until(lambda: orchestrator.state().phase != PHASE_PREVIEW))
+
+    def test_buttons_of_other_steps_are_rejected(self):
+        orchestrator = self.make()
+        orchestrator.start()
+        self.wait_ready(orchestrator)
+        for command in ('monitor', 'recalibrate'):
+            self.assertRejected(orchestrator, command, None, 'no está disponible')
+
+
 class OrchestratorErrorTests(OrchestratorTestCase):
     def test_camera_error(self):
         self.camera = FakeCamera(fail=True)
@@ -276,16 +344,18 @@ class OrchestratorErrorTests(OrchestratorTestCase):
         self.assertFalse(self.bracelet.is_connected)
 
     def test_failed_calibration_returns_to_camera_with_notice(self):
-        self.face = None
         orchestrator = self.make()
         orchestrator.start()
-        self.wait_phase(orchestrator, PHASE_PREVIEW)
+        self.wait_ready(orchestrator)
+        # El rostro desaparece justo al empezar la calibración.
+        self.face = lambda: None if orchestrator.state().phase == PHASE_CALIBRATING else OPEN_FACE
         orchestrator.send_command('calibrate')
         self.assertTrue(wait_until(lambda: orchestrator.state().notice is not None))
         self.assertEqual(orchestrator.state().phase, PHASE_PREVIEW)
         self.assertIn('Calibración incompleta', orchestrator.state().notice)
 
         self.face = OPEN_FACE  # Segundo intento, ahora con rostro.
+        self.wait_ready(orchestrator)
         orchestrator.send_command('calibrate')
         self.wait_phase(orchestrator, PHASE_CALIBRATED)
         self.assertIsNone(orchestrator.state().notice)
@@ -361,7 +431,7 @@ class ViewTests(OrchestratorTestCase):
 
     def test_commands(self):
         self.orchestrator.start()
-        self.wait_phase(self.orchestrator, PHASE_PREVIEW)
+        self.wait_ready(self.orchestrator)
         url = reverse('monitoring:command')
         self.assertEqual(self.client.post(url, {'action': 'calibrate'}).status_code, 200)
         self.wait_phase(self.orchestrator, PHASE_CALIBRATED)
@@ -372,6 +442,31 @@ class ViewTests(OrchestratorTestCase):
         self.assertTrue(wait_until(lambda: not self.orchestrator.state().bracelet.connected))
         self.client.post(url, {'action': 'simulate_reconnect'})
         self.assertTrue(wait_until(lambda: self.orchestrator.state().bracelet.connected))
+
+    def test_rejected_command_says_what_is_missing(self):
+        self.face = None
+        self.orchestrator.start()
+        self.wait_phase(self.orchestrator, PHASE_PREVIEW)
+        response = self.client.post(reverse('monitoring:command'), {'action': 'calibrate'})
+        self.assertEqual(response.status_code, 409)
+        data = response.json()
+        self.assertFalse(data['ok'])
+        self.assertEqual(data['step'], 'camera')
+        self.assertIn('No se detecta tu rostro', data['error'])
+
+    def test_continue_buttons_start_locked(self):
+        self.orchestrator.start()
+        page = self.client.get(reverse('monitoring:session')).content.decode()
+        self.assertIn('id="camera-continue" disabled', page)
+        self.assertIn('id="bracelet-continue" disabled', page)
+        self.assertIn('Completa los 3 puntos para continuar.', page)
+        self.assertIn('Espera a que la pulsera se conecte.', page)
+
+    def test_js_and_css_carry_a_version_so_the_browser_does_not_reuse_old_copies(self):
+        self.orchestrator.start()
+        page = self.client.get(reverse('monitoring:session')).content.decode()
+        self.assertRegex(page, r'/static/monitoring/session\.js\?v=\d+')
+        self.assertRegex(page, r'/static/monitoring/vigia\.css\?v=\d+')
 
     async def test_video_stream_sends_jpeg_frames(self):
         """El video es un generador asíncrono: con Daphne no ocupa el hilo de las vistas."""
@@ -563,7 +658,10 @@ class Rnf02StatsTests(OrchestratorTestCase):
     def test_rnf02_text(self):
         from monitoring.presenters import rnf02_text
         self.assertIn('cumplida', rnf02_text(310, 27))
-        self.assertIn('faltan 3.0 min', rnf02_text(120, 29))
+        self.assertIn('faltan 3.0 min', rnf02_text(120, 29, live=True))
+        # Ya finalizada no puede decir «en curso».
+        self.assertEqual(rnf02_text(120, 29),
+                         'Prueba de 5 min (RNF-02): no cumplida, la sesión tuvo 2.0 min de monitoreo.')
         self.assertIn('no cumplida', rnf02_text(310, 20))
         self.assertIn('sin datos', rnf02_text(0, None))
 

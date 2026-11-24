@@ -1,5 +1,5 @@
 {% extends "monitoring/base.html" %}
-{% load static %}
+{% load static vigia_static %}
 
 {% block title %}Sesión · VIGÍA{% endblock %}
 {% block status %}Preparando{% endblock %}
@@ -36,7 +36,10 @@
     </div>
     <div class="actions">
       <button class="btn btn-secondary" type="submit" form="finish-form">Finalizar sesión</button>
-      <button class="btn btn-primary" type="button" data-goto="bracelet" id="camera-continue" disabled>Continuar {% include "monitoring/icons/arrow.svg" %}</button>
+      <div class="right">
+        <span class="footnote" id="camera-hint">Completa los 3 puntos para continuar.</span>
+        <button class="btn btn-primary" type="button" data-goto="bracelet" id="camera-continue" disabled>Continuar {% include "monitoring/icons/arrow.svg" %}</button>
+      </div>
     </div>
   </section>
 
@@ -55,11 +58,15 @@
           <li class="ok"><span class="mark"></span><div><strong>Apagado automático</strong><span>Tras 3 s sin señal, la vibración se detiene.</span></div></li>
         </ul>
         {% include "monitoring/_strength.html" %}
+        <div class="notice warn" id="bracelet-notice" hidden>{% include "monitoring/icons/warn.svg" %}<span data-text></span></div>
       </div>
     </div>
     <div class="actions">
       <button class="btn btn-secondary" type="button" data-goto="camera">Volver {% include "monitoring/icons/arrow-left.svg" %}</button>
-      <button class="btn btn-primary" type="button" data-command="calibrate">Continuar {% include "monitoring/icons/arrow.svg" %}</button>
+      <div class="right">
+        <span class="footnote" id="bracelet-hint">Espera a que la pulsera se conecte.</span>
+        <button class="btn btn-primary" type="button" data-command="calibrate" id="bracelet-continue" disabled>Continuar {% include "monitoring/icons/arrow.svg" %}</button>
+      </div>
     </div>
   </section>
 
@@ -202,5 +209,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{% static 'monitoring/session.js' %}"></script>
+<script src="{% versioned_static 'monitoring/session.js' %}"></script>
 {% endblock %}

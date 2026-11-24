@@ -1,10 +1,10 @@
-{% load static %}<!doctype html>
+{% load static vigia_static %}<!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}VIGÍA{% endblock %}</title>
-  <link rel="stylesheet" href="{% static 'monitoring/vigia.css' %}">
+  <link rel="stylesheet" href="{% versioned_static 'monitoring/vigia.css' %}">
 </head>
 <body>
 {% block body %}

@@ -34,6 +34,9 @@
     lastDegradedAt: 0,
     videoOn: false,
     strengthBusyUntil: 0, // Mientras se mueve el deslizador no se pisa su valor.
+    rejection: null, // { step, text }: el servidor rechazó un botón y dice qué falta.
+    // Al recargar en #pulsera se comprueba la cámara una vez: si falta algo, a la cámara.
+    checkReloadedStep: window.location.hash === '#pulsera',
   };
 
   const $ = (selector, scope = document) => scope.querySelector(selector);
@@ -129,17 +132,21 @@
         : 'Vista en vivo · sin grabar';
     });
     setCheck('chk-light', !cameraReady ? 'wait' : s.light_ok ? 'ok' : 'bad');
-    document.getElementById('camera-continue').disabled = s.phase !== 'preview';
-
-    const notice = document.getElementById('camera-notice');
-    notice.hidden = !s.notice;
-    if (s.notice) {
-      $('[data-text]', notice).textContent = s.notice;
-      if (ui.step !== 'camera') {
-        ui.step = 'camera'; // Si falló la calibración se vuelve a la cámara.
-        window.history.replaceState(null, '', '#');
-      }
+    // Sólo se pasa a la pulsera con los 3 puntos en verde: cámara, rostro y luz.
+    const cameraOk = s.phase === 'preview' && s.face_detected && s.light_ok;
+    document.getElementById('camera-continue').disabled = !cameraOk;
+    document.getElementById('camera-hint').hidden = cameraOk;
+    if (ui.checkReloadedStep && s.phase === 'preview') {
+      ui.checkReloadedStep = false;
+      if (!cameraOk && ui.step === 'bracelet') goToStep('camera');
     }
+
+    const rejected = (step) => (ui.rejection && ui.rejection.step === step ? ui.rejection.text : '');
+    const notice = document.getElementById('camera-notice');
+    const noticeText = s.notice || rejected('camera');
+    notice.hidden = !noticeText;
+    if (noticeText) $('[data-text]', notice).textContent = noticeText;
+    if (s.notice && ui.step !== 'camera') goToStep('camera'); // Si falló la calibración.
 
     const bracelet = document.getElementById('chk-bracelet');
     const name = $('[data-name]', bracelet);
@@ -153,6 +160,13 @@
       setCheck('chk-bracelet', 'wait', s.bracelet.last_error || 'Buscando…');
       name.textContent = 'Buscando la pulsera…';
     }
+    // A la calibración sólo se pasa con la pulsera conectada.
+    const braceletOk = s.phase === 'preview' && Boolean(s.bracelet && s.bracelet.connected);
+    document.getElementById('bracelet-continue').disabled = !braceletOk;
+    document.getElementById('bracelet-hint').hidden = braceletOk;
+    const braceletNotice = document.getElementById('bracelet-notice');
+    braceletNotice.hidden = !rejected('bracelet');
+    $('[data-text]', braceletNotice).textContent = rejected('bracelet');
 
     const remaining = Math.ceil(5 * (1 - s.calibration_progress));
     document.getElementById('calib-seconds').textContent = `${remaining} s`;
@@ -234,28 +248,51 @@
 
   // ---------- Botones ----------
 
+  function goToStep(step) {
+    ui.step = step;
+    window.history.replaceState(null, '', step === 'bracelet' ? '#pulsera' : '#');
+  }
+
   async function sendCommand(action, button, value) {
     if (button) button.disabled = true;
     try {
       const body = new FormData();
       body.append('action', action);
       if (value !== undefined) body.append('value', value);
-      await fetch(urls.commandUrl, {
+      const response = await fetch(urls.commandUrl, {
         method: 'POST',
         body,
         headers: { 'X-CSRFToken': urls.csrf },
         credentials: 'same-origin',
       });
+      if (response.status === 409) {
+        // El servidor dice qué falta (rostro, luz o pulsera) y en qué paso corregirlo.
+        const data = await response.json();
+        if (data.step) {
+          ui.rejection = { step: data.step, text: data.error };
+          goToStep(data.step);
+        }
+      } else if (response.ok && button) {
+        ui.rejection = null; // Un botón aceptado borra el aviso (el deslizador no).
+      }
+    } catch (error) {
+      // Sin conexión con el servidor: el botón se habilita otra vez y se puede reintentar.
     } finally {
-      if (button) setTimeout(() => { button.disabled = false; }, 800);
+      if (button) {
+        setTimeout(() => {
+          button.disabled = false;
+          poll(); // Vuelve a aplicar las validaciones (puede quedar bloqueado).
+        }, 800);
+      }
+      poll();
     }
   }
 
   document.addEventListener('click', (event) => {
     const goto = event.target.closest('[data-goto]');
     if (goto && !goto.disabled) {
-      ui.step = goto.dataset.goto;
-      window.history.replaceState(null, '', ui.step === 'bracelet' ? '#pulsera' : '#');
+      ui.rejection = null;
+      goToStep(goto.dataset.goto);
       poll();
       return;
     }

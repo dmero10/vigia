@@ -17,7 +17,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
 from alerts.bracelet import DEFAULT_STRENGTH, MAX_STRENGTH, MIN_STRENGTH
-from monitoring.orchestrator import COMMANDS, get_orchestrator
+from monitoring.orchestrator import COMMANDS, CommandRejected, get_orchestrator
 from monitoring.explain import LEVEL_NAMES, build_csv
 from monitoring.presenters import (
     STRENGTH_NAMES,
@@ -112,7 +112,12 @@ def command(request):
     orchestrator = get_orchestrator()
     action = request.POST.get('action')
     if action in COMMANDS:
-        orchestrator.send_command(action)
+        try:
+            orchestrator.send_command(action)
+        except CommandRejected as error:
+            # 409: el botón existe, pero falta algo (rostro, luz, pulsera…).
+            return JsonResponse({'ok': False, 'error': str(error), 'step': error.step},
+                                status=409)
     elif action == 'strength':
         try:
             orchestrator.set_strength(int(request.POST.get('value', '')))
